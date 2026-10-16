@@ -1,0 +1,13 @@
+[package]
+name = "integra-diag"
+description = "Network diagnostics: DNS/TCP checks now, TLS/HTTP and strategy benchmark next"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+integra-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true

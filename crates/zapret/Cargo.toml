@@ -1,0 +1,24 @@
+[package]
+name = "integra-zapret"
+description = "Zapret process/service management: strategy discovery, hidden launch, multi-profile control"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+integra-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+regex.workspace = true
+encoding_rs.workspace = true
+chrono.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+] }

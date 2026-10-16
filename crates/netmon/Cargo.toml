@@ -1,0 +1,22 @@
+[package]
+name = "integra-netmon"
+description = "Per-process network connection tracker (Windows iphlpapi tables, /proc on Linux)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+chrono.workspace = true
+dns-lookup = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_System_Diagnostics_ToolHelp",
+] }

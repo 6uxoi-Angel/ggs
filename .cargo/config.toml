@@ -1,0 +1,4 @@
+# Cross-compilation helper (used in the Linux dev sandbox to type-check
+# Windows-specific code). On Windows you don't need any of this.
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
