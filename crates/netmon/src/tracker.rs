@@ -33,6 +33,8 @@ pub struct TrackerConfig {
     pub poll_interval: Duration,
     pub resolve_hosts: bool,
     pub max_entries: usize,
+    /// How often the process list is re-scanned (auto-inclusion latency).
+    pub process_refresh: Duration,
 }
 
 impl Default for TrackerConfig {
@@ -42,6 +44,7 @@ impl Default for TrackerConfig {
             poll_interval: Duration::from_millis(1000),
             resolve_hosts: true,
             max_entries: 5000,
+            process_refresh: Duration::from_secs(3),
         }
     }
 }
@@ -198,7 +201,8 @@ fn run_session(
     let mut seen: HashMap<ConnectionKey, usize> = HashMap::new();
     let mut process_cache: HashMap<u32, ProcessInfo> = HashMap::new();
     let mut matched_pids: HashSet<u32> = HashSet::new();
-    let mut last_process_refresh = Instant::now() - Duration::from_secs(60);
+    let process_refresh = config.process_refresh;
+    let mut last_process_refresh = Instant::now() - process_refresh;
 
     // Reverse-DNS worker keeps blocking lookups off the polling loop.
     let (resolve_tx, resolve_rx): (Sender<IpAddr>, Receiver<IpAddr>) = channel();
@@ -222,7 +226,7 @@ fn run_session(
         let now = Local::now();
         let snapshot = collector.snapshot();
 
-        if last_process_refresh.elapsed() > Duration::from_secs(3) {
+        if last_process_refresh.elapsed() > process_refresh {
             for proc in collector.processes() {
                 process_cache.insert(proc.pid, proc);
             }
@@ -401,7 +405,13 @@ mod tests {
     }
 
     fn config(filter: ProcessFilter) -> TrackerConfig {
-        TrackerConfig { filter, poll_interval: Duration::from_millis(40), resolve_hosts: false, max_entries: 100 }
+        TrackerConfig {
+            filter,
+            poll_interval: Duration::from_millis(40),
+            resolve_hosts: false,
+            max_entries: 100,
+            process_refresh: Duration::from_millis(90),
+        }
     }
 
     #[test]

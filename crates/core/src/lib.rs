@@ -17,7 +17,7 @@ pub mod logbuf;
 pub mod paths;
 pub mod profile;
 
-pub use config::{AppConfig, ConfigStore};
+pub use config::{AppConfig, ConfigStore, TaskbarConfig, ThemeColors, ThemePreset, BUILTIN_THEMES};
 pub use domain::{normalize_host, DomainError};
 pub use lists::{ListsManager, LISTS};
 pub use logbuf::{LogBuffer, LogEntry, LogLevel};

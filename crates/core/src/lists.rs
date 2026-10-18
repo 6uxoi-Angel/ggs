@@ -70,7 +70,7 @@ pub fn natural_key(name: &str) -> Vec<NaturalPart> {
     natural_parts(name)
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum NaturalPart {
     Text(String),
     Num(u64),
@@ -146,6 +146,12 @@ impl ListsManager {
         self.root.lock().join("lists")
     }
 
+    /// Path of one list file. Caller must hold the root lock (or accept a
+    /// racy read) — used internally by the guarded write operations.
+    fn lists_dir_no_lock(root: &Path) -> PathBuf {
+        root.join("lists")
+    }
+
     pub fn list_path(&self, id: &str) -> Option<PathBuf> {
         find_spec(id).map(|spec| self.lists_dir().join(spec.file))
     }
@@ -178,8 +184,8 @@ impl ListsManager {
     /// duplicates are reported, not re-added. Comments are appended verbatim.
     pub fn add(&self, id: &str, entries: &[String]) -> Result<BulkReport, DomainError> {
         let Some(spec) = find_spec(id) else { return Err(DomainError::CannotParse) };
-        let _guard = self.root.lock(); // serialize writers
-        let path = self.lists_dir().join(spec.file);
+        let guard = self.root.lock(); // serialize writers
+        let path = Self::lists_dir_no_lock(&guard).join(spec.file);
 
         let mut lines: Vec<String> = match fs::read_to_string(&path) {
             Ok(text) => text.lines().map(|l| l.trim_end().to_string()).collect(),
@@ -212,7 +218,7 @@ impl ListsManager {
         }
 
         if report.changed() {
-            fs::create_dir_all(self.lists_dir())?;
+            fs::create_dir_all(Self::lists_dir_no_lock(&guard))?;
             atomic_write_lines(&path, &lines)?;
         }
         Ok(report)
@@ -221,8 +227,8 @@ impl ListsManager {
     /// Remove a single entry (case-insensitive). Returns true when the file changed.
     pub fn remove(&self, id: &str, entry: &str) -> std::io::Result<bool> {
         let Some(spec) = find_spec(id) else { return Ok(false) };
-        let _guard = self.root.lock();
-        let path = self.lists_dir().join(spec.file);
+        let guard = self.root.lock();
+        let path = Self::lists_dir_no_lock(&guard).join(spec.file);
         let Ok(text) = fs::read_to_string(&path) else { return Ok(false) };
         let needle = entry.trim().to_ascii_lowercase();
         let mut removed = false;
@@ -259,8 +265,8 @@ impl ListsManager {
         let Some(spec) = find_spec(id) else {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "unknown list"));
         };
-        let _guard = self.root.lock();
-        let path = self.lists_dir().join(spec.file);
+        let guard = self.root.lock();
+        let path = Self::lists_dir_no_lock(&guard).join(spec.file);
         let mut report = BulkReport::default();
         let mut seen: HashSet<String> = HashSet::new();
         let mut out: Vec<String> = Vec::new();
@@ -285,7 +291,7 @@ impl ListsManager {
             }
         }
         report.added = out.clone();
-        fs::create_dir_all(self.lists_dir())?;
+        fs::create_dir_all(Self::lists_dir_no_lock(&guard))?;
         atomic_write_lines(&path, &out)?;
         Ok(report)
     }
@@ -353,9 +359,26 @@ mod tests {
 
     #[test]
     fn natural_sort_orders_strategies() {
-        let mut names = vec!["general10.bat".to_string(), "general2.bat".into(), "general.bat".into()];
+        // Numbered variants group first (shared "general" text part, then the
+        // numeric part), then plain-text names in string order.
+        let mut names = vec![
+            "general10.bat".to_string(),
+            "general FAKE TLS.bat".into(),
+            "general.bat".into(),
+            "general (ALT).bat".into(),
+            "general2.bat".into(),
+        ];
         names.sort_by_key(|n| natural_parts(n));
-        assert_eq!(names, vec!["general.bat", "general2.bat", "general10.bat"]);
+        assert_eq!(
+            names,
+            vec![
+                "general2.bat",
+                "general10.bat",
+                "general (ALT).bat",
+                "general FAKE TLS.bat",
+                "general.bat"
+            ]
+        );
     }
 }
 

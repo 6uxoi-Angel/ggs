@@ -142,9 +142,12 @@ pub fn normalize_list_entry(raw: &str) -> Result<String, DomainError> {
     if raw.starts_with('#') || raw.starts_with(';') {
         return Ok(raw.to_string());
     }
+    // Networks first (10.0.0.0/8). An invalid network falls through so URLs
+    // with a path (https://example.com/x) still normalize into a domain.
     if raw.contains('/') {
-        let net: ipnet::IpNet = raw.parse().map_err(|_| DomainError::InvalidIpOrCidr)?;
-        return Ok(net.to_string());
+        if let Ok(net) = raw.parse::<ipnet::IpNet>() {
+            return Ok(net.to_string());
+        }
     }
     if let Ok(ip) = raw.parse::<IpAddr>() {
         return Ok(ip.to_string());
@@ -191,5 +194,13 @@ mod tests {
         assert_eq!(normalize_list_entry("HTTPS://Example.com ").unwrap(), "example.com");
         assert_eq!(normalize_list_entry("# comment").unwrap(), "# comment");
         assert!(normalize_list_entry("999.1.1.1/99").is_err());
+    }
+
+    #[test]
+    fn list_entries_urls_with_paths() {
+        // Regression: URLs must not be mistaken for CIDR networks.
+        assert_eq!(normalize_list_entry("https://example.com/path?q=1").unwrap(), "example.com");
+        assert_eq!(normalize_list_entry("http://sub.example.org/a/b/").unwrap(), "sub.example.org");
+        assert_eq!(normalize_list_entry("example.com/path").unwrap(), "example.com");
     }
 }

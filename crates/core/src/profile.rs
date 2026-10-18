@@ -29,6 +29,10 @@ pub struct ZapretProfile {
     /// Remembered service state hint (the real check is done via `sc query`).
     #[serde(default)]
     pub service_expected: bool,
+    /// Use the shared (cross-profile) lists folder instead of this profile's
+    /// own `<zapret>/lists` directory.
+    #[serde(default)]
+    pub use_shared_lists: bool,
 }
 
 fn default_strategy() -> String {
@@ -48,6 +52,7 @@ impl ZapretProfile {
             autostart: false,
             enabled: true,
             service_expected: false,
+            use_shared_lists: false,
         }
     }
 
@@ -121,6 +126,23 @@ mod tests {
         assert_eq!(profile.inspect(), ProfileHealth::MissingFolder);
 
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn shared_lists_flag_defaults_and_serializes() {
+        let mut a = ZapretProfile::new("a", "/tmp/a");
+        assert!(!a.use_shared_lists, "individual lists by default");
+        a.use_shared_lists = true;
+        let json = serde_json::to_string(&a).unwrap();
+        assert!(json.contains("use_shared_lists\":true"));
+        let back: ZapretProfile = serde_json::from_str(&json).unwrap();
+        assert!(back.use_shared_lists);
+        // Old configs without the field still parse.
+        let old = serde_json::from_str::<ZapretProfile>(
+            r#"{"id":"ab12cd34","name":"n","path":"/tmp"}"#,
+        )
+        .unwrap();
+        assert!(!old.use_shared_lists);
     }
 
     #[test]

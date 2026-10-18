@@ -11,6 +11,111 @@ use crate::consts::*;
 use crate::profile::ZapretProfile;
 use crate::random_hex;
 
+/// Per-element colors of a custom theme. `None` means "inherit from the
+/// base builtin theme". Values are `#rrggbb` strings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThemeColors {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tabbar: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muted: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub danger: Option<String>,
+}
+
+impl ThemeColors {
+    /// Keep only valid `#rgb`/`#rrggbb` values, drop everything else.
+    pub fn sanitize(&mut self) {
+        for slot in [
+            &mut self.accent,
+            &mut self.background,
+            &mut self.surface,
+            &mut self.tabbar,
+            &mut self.tab,
+            &mut self.text,
+            &mut self.muted,
+            &mut self.border,
+            &mut self.success,
+            &mut self.warning,
+            &mut self.danger,
+        ] {
+            if let Some(value) = slot {
+                if !is_valid_color(value) {
+                    *slot = None;
+                }
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == ThemeColors::default()
+    }
+}
+
+fn is_valid_color(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.first() != Some(&b'#') {
+        return false;
+    }
+    let hex = &bytes[1..];
+    (hex.len() == 3 || hex.len() == 6 || hex.len() == 8)
+        && hex.iter().all(|b| b.is_ascii_hexdigit())
+}
+
+/// A saved theme customization (colors + optional background images).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThemePreset {
+    pub id: String,
+    pub name: String,
+    /// Builtin theme the preset is layered on (`light` | `dark` | `dark_accent`).
+    #[serde(default = "default_preset_base")]
+    pub base: String,
+    #[serde(default)]
+    pub colors: ThemeColors,
+    /// Absolute path of an image shown behind the tab bar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tabbar_image: Option<String>,
+    /// Absolute path of an image shown behind the tab content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_image: Option<String>,
+}
+
+fn default_preset_base() -> String {
+    "dark_accent".into()
+}
+
+/// Where the tab bar lives and how it looks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskbarConfig {
+    /// `top` | `bottom` | `left` | `right`.
+    pub position: String,
+    /// `full` | `compact` | `icons`.
+    pub style: String,
+    pub show_labels: bool,
+}
+
+impl Default for TaskbarConfig {
+    fn default() -> Self {
+        Self { position: "top".into(), style: "full".into(), show_labels: true }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -32,6 +137,15 @@ pub struct AppConfig {
     pub autostart_windows: bool,
 
     pub log_level: String,
+
+    // Developer mode (10 clicks on the settings tab).
+    pub dev_mode: bool,
+
+    // Tab bar placement/appearance.
+    pub taskbar: TaskbarConfig,
+
+    // Saved theme presets (colors + background images).
+    pub theme_presets: Vec<ThemePreset>,
 
     // Zapret maintenance (implemented in a later iteration, persisted now).
     pub auto_check_zapret: bool,
@@ -97,6 +211,9 @@ impl Default for AppConfig {
             close_to_tray: true,
             autostart_windows: false,
             log_level: "ALL".into(),
+            dev_mode: false,
+            taskbar: TaskbarConfig::default(),
+            theme_presets: Vec::new(),
             auto_check_zapret: true,
             auto_install_zapret: false,
             auto_update_zapret: false,
@@ -281,10 +398,15 @@ struct LegacyConfig {
 }
 
 fn migrate_legacy(new_path: &Path) -> Option<AppConfig> {
-    let candidates = [
-        new_path.parent()?.join("config-v2.json"),
-        legacy_v2_path()?,
-    ];
+    // Candidate files; note `legacy_v2_path()` is None on non-Windows and
+    // must not abort the whole migration when a local candidate exists.
+    let mut candidates = Vec::new();
+    if let Some(parent) = new_path.parent() {
+        candidates.push(parent.join("config-v2.json"));
+    }
+    if let Some(legacy) = legacy_v2_path() {
+        candidates.push(legacy);
+    }
     let file = candidates.into_iter().find(|p| p.is_file())?;
     let text = fs::read_to_string(&file).ok()?;
     let legacy: LegacyConfig = serde_json::from_str(&text).ok()?;
@@ -332,12 +454,25 @@ fn legacy_v2_path() -> Option<PathBuf> {
     }
 }
 
+/// Built-in theme identifiers, always available.
+pub const BUILTIN_THEMES: [&str; 3] = ["light", "dark", "dark_accent"];
+
+/// Is `theme` a valid selector: a builtin name or `preset:<id>`.
+pub fn is_valid_theme(theme: &str) -> bool {
+    if BUILTIN_THEMES.contains(&theme) {
+        return true;
+    }
+    theme
+        .strip_prefix("preset:")
+        .is_some_and(|id| !id.trim().is_empty() && id.len() <= 64)
+}
+
 /// Clamp and validate everything a user (or a corrupted file) could set.
 fn sanitize(config: &mut AppConfig) {
     if !["ru", "en"].contains(&config.language.as_str()) {
         config.language = "ru".into();
     }
-    if !["light", "dark", "dark_accent"].contains(&config.theme.as_str()) {
+    if !is_valid_theme(&config.theme) {
         config.theme = "dark_accent".into();
     }
     if config.bridge.token.trim().is_empty() {
@@ -356,6 +491,25 @@ fn sanitize(config: &mut AppConfig) {
         config.netmon.max_entries = 5000;
     }
     config.diagnostics.custom_sites.truncate(MAX_CUSTOM_SITES);
+
+    match config.taskbar.position.as_str() {
+        "top" | "bottom" | "left" | "right" => {}
+        _ => config.taskbar.position = "top".into(),
+    }
+    match config.taskbar.style.as_str() {
+        "full" | "compact" | "icons" => {}
+        _ => config.taskbar.style = "full".into(),
+    }
+    for preset in &mut config.theme_presets {
+        preset.colors.sanitize();
+        if !BUILTIN_THEMES.contains(&preset.base.as_str()) {
+            preset.base = "dark_accent".into();
+        }
+        if preset.name.trim().is_empty() {
+            preset.name = preset.id.clone();
+        }
+    }
+    config.theme_presets.truncate(60);
 
     // Unique profile ids; drop active pointer if it dangles.
     let mut seen = std::collections::HashSet::new();
@@ -425,6 +579,51 @@ mod tests {
         let store = ConfigStore::load(Some(path.clone()));
         store.update(|c| c.bridge.port = 10).unwrap();
         assert_eq!(store.get().bridge.port, MIN_PORT);
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn theme_and_taskbar_validation() {
+        let path = tmp("themes");
+        let store = ConfigStore::load(Some(path.clone()));
+        store
+            .update(|c| {
+                c.theme = "preset:abc123".into();
+                c.taskbar.position = "left".into();
+                c.taskbar.style = "icons".into();
+                c.theme_presets.push(ThemePreset {
+                    id: "abc123".into(),
+                    name: "Amber".into(),
+                    base: "dark_accent".into(),
+                    colors: ThemeColors { accent: Some("#F59E0B".into()), danger: Some("nope".into()), ..Default::default() },
+                    tabbar_image: None,
+                    content_image: None,
+                });
+            })
+            .unwrap();
+        let config = store.get();
+        assert_eq!(config.theme, "preset:abc123");
+        assert_eq!(config.taskbar.position, "left");
+        assert_eq!(config.theme_presets[0].colors.accent.as_deref(), Some("#F59E0B"));
+        assert_eq!(config.theme_presets[0].colors.danger, None, "invalid color dropped");
+
+        // Invalid selectors fall back to the default theme.
+        store.update(|c| {
+            c.theme = "hacker_green".into();
+            c.taskbar.position = "diagonal".into();
+        })
+        .unwrap();
+        assert_eq!(store.get().theme, "dark_accent");
+        assert_eq!(store.get().taskbar.position, "top");
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn dev_mode_and_migration_persist() {
+        let path = tmp("devmode");
+        let store = ConfigStore::load(Some(path.clone()));
+        store.update(|c| c.dev_mode = true).unwrap();
+        assert!(ConfigStore::load(Some(path.clone())).get().dev_mode);
         fs::remove_file(&path).ok();
     }
 

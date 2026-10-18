@@ -6,6 +6,7 @@
 //! (tracked through the launcher's child PID), so several profiles can run
 //! side by side.
 
+pub mod maintenance;
 pub mod manager;
 pub mod runtime_bat;
 pub mod strategy;
@@ -48,6 +49,8 @@ pub enum ZapretError {
     InstallFailed(String),
     #[error("zapret.remove_failed")]
     RemoveFailed(String),
+    #[error("maint.failed: {0}")]
+    Maintenance(String),
     #[error("windows.batch_no_winws")]
     BatchInvalid,
     #[error(transparent)]
@@ -70,6 +73,7 @@ impl ZapretError {
             ZapretError::StopPartial(_) => "zapret.stop_partial",
             ZapretError::InstallFailed(_) => "zapret.install_failed",
             ZapretError::RemoveFailed(_) => "zapret.remove_failed",
+            ZapretError::Maintenance(_) => "maint.failed",
             ZapretError::BatchInvalid => "windows.batch_no_winws",
             ZapretError::Io(_) => "common.error",
         }

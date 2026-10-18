@@ -1,8 +1,10 @@
 [package]
 name = "integra-app"
+description = "Integra Tauri application: commands, events, tray, benchmark, UI host"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+build = "build.rs"
 
 [lib]
 name = "integra_app_lib"
@@ -17,10 +19,19 @@ integra-zapret.workspace = true
 integra-netmon.workspace = true
 integra-diag.workspace = true
 integra-bridge.workspace = true
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 serde.workspace = true
 serde_json.workspace = true
 parking_lot.workspace = true
 chrono.workspace = true
+base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+] }

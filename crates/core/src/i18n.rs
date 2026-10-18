@@ -11,6 +11,7 @@ static CURRENT: RwLock<&str> = RwLock::new("ru");
 /// (key, ru, en)
 static TABLE: &[(&str, &str, &str)] = &[
     // ── common ────────────────────────────────────────────────
+    ("app.brand", "Integra", "Integra"),
     ("common.ok", "ОК", "OK"),
     ("common.cancel", "Отмена", "Cancel"),
     ("common.save", "Сохранить", "Save"),
@@ -213,6 +214,7 @@ static TABLE: &[(&str, &str, &str)] = &[
     ("logs.filter_level", "Уровень", "Level"),
     ("logs.empty", "Пока пусто", "Nothing yet"),
     ("logs.export", "Экспорт", "Export"),
+    ("logs.autoscroll", "Автопрокрутка", "Auto-scroll"),
     // ── settings ──────────────────────────────────────────────
     ("settings.title", "Настройки", "Settings"),
     ("settings.language", "Язык интерфейса", "Interface language"),
@@ -245,6 +247,131 @@ static TABLE: &[(&str, &str, &str)] = &[
     ("core.ip_not_allowed", "IP-адреса здесь не поддерживаются", "IP addresses are not allowed here"),
     ("core.invalid_domain", "Некорректное доменное имя", "Invalid domain name"),
     ("core.invalid_ip_or_cidr", "Некорректный IP или CIDR", "Invalid IP or CIDR"),
+    // ── developer mode ────────────────────────────────────────
+    ("dev.title", "Режим разработчика", "Developer mode"),
+    ("dev.enabled", "Режим разработчика включён", "Developer mode enabled"),
+    ("dev.already", "Режим разработчика уже включён", "Developer mode already enabled"),
+    ("dev.hint", "Ещё {count} кликов до режима разработчика", "{count} more clicks to developer mode"),
+    ("dev.open_logs", "Открыть dev логи", "Open dev logs"),
+    ("dev.opened", "Окно dev-логов открыто", "Dev logs window opened"),
+    ("dev.open_failed", "Не удалось открыть окно логов: {error}", "Failed to open the logs window: {error}"),
+    ("dev.logs_desc", "Каждое событие приложения пишется в dev.log: уровень, источник (модуль кода) и время. Отдельное окно консоли читает файл в реальном времени — удобно для анализа ошибок.", "Every app event is written to dev.log: level, source (code module) and time. A separate console window tails the file in real time — handy for error analysis."),
+    ("dev.webview_console", "Также открыта консоль WebView (DevTools)", "The WebView console (DevTools) was opened too"),
+    ("dev.section", "Разработчику", "Developer"),
+    // ── taskbar ───────────────────────────────────────────────
+    ("taskbar.appearance", "Панель вкладок", "Tab bar"),
+    ("taskbar.position", "Расположение", "Position"),
+    ("taskbar.pos_top", "Сверху", "Top"),
+    ("taskbar.pos_bottom", "Снизу", "Bottom"),
+    ("taskbar.pos_left", "Слева", "Left"),
+    ("taskbar.pos_right", "Справа", "Right"),
+    ("taskbar.style", "Стиль", "Style"),
+    ("taskbar.style_full", "Обычный", "Full"),
+    ("taskbar.style_compact", "Компактный", "Compact"),
+    ("taskbar.style_icons", "Только иконки", "Icons only"),
+    ("taskbar.labels", "Подписи вкладок", "Tab labels"),
+    ("taskbar.saved", "Вид панели сохранён", "Tab bar layout saved"),
+    // ── theme customization ───────────────────────────────────
+    ("theme.customize", "Кастомизация темы", "Theme customization"),
+    ("theme.hint", "Меняйте цвета отдельных элементов, ставьте фоновые изображения и сохраняйте наборы как пресеты.", "Tweak per-element colors, set background images and save the result as presets."),
+    ("theme.base", "Базовая тема", "Base theme"),
+    ("theme.presets", "Пресеты", "Presets"),
+    ("theme.preset_name", "Название пресета", "Preset name"),
+    ("theme.save_preset", "Сохранить как пресет", "Save as preset"),
+    ("theme.delete_preset", "Удалить", "Delete"),
+    ("theme.apply", "Применить", "Apply"),
+    ("theme.preset_saved", "Пресет «{name}» сохранён", "Preset “{name}” saved"),
+    ("theme.preset_deleted", "Пресет удалён", "Preset deleted"),
+    ("theme.preset_applied", "Тема применена", "Theme applied"),
+    ("theme.colors", "Цвета элементов", "Element colors"),
+    ("theme.color_accent", "Акцент", "Accent"),
+    ("theme.color_background", "Фон приложения", "App background"),
+    ("theme.color_surface", "Фон панелей", "Panel background"),
+    ("theme.color_tabbar", "Фон панели вкладок", "Tab bar background"),
+    ("theme.color_tab", "Фон вкладки", "Tab background"),
+    ("theme.color_text", "Текст", "Text"),
+    ("theme.color_muted", "Приглушённый текст", "Muted text"),
+    ("theme.color_border", "Границы", "Borders"),
+    ("theme.color_success", "Успех", "Success"),
+    ("theme.color_warning", "Предупреждение", "Warning"),
+    ("theme.color_danger", "Ошибка", "Danger"),
+    ("theme.images", "Фоновые изображения", "Background images"),
+    ("theme.tabbar_image", "Картинка за панелью вкладок", "Tab bar background image"),
+    ("theme.content_image", "Картинка за содержимым вкладки", "Tab content background image"),
+    ("theme.choose_image", "Выбрать изображение…", "Choose image…"),
+    ("theme.clear_image", "Убрать", "Clear"),
+    ("theme.reset", "Сбросить кастомизацию", "Reset customization"),
+    ("theme.reset_done", "Кастомизация сброшена", "Customization reset"),
+    ("theme.image_too_large", "Файл больше 8 МБ", "The file is larger than 8 MB"),
+    ("theme.name_required", "Введите название пресета", "Enter a preset name"),
+    // ── shared lists ──────────────────────────────────────────
+    ("lists.shared", "Общие списки", "Shared lists"),
+    ("lists.individual", "Индивидуальные", "Individual"),
+    ("lists.use_shared", "Общие списки (для всех профилей)", "Shared lists (across profiles)"),
+    ("lists.shared_hint", "Общие списки лежат отдельно от папки Zapret. Любой профиль с включённой опцией использует их вместо своих.", "Shared lists live outside the Zapret folder. Any profile with the option enabled uses them instead of its own."),
+    ("lists.source_shared", "Источник: общие списки", "Source: shared lists"),
+    ("lists.source_individual", "Источник: папка профиля", "Source: profile folder"),
+    ("profile.use_shared", "Общие списки", "Shared lists"),
+    // ── help ──────────────────────────────────────────────────
+    ("help.title", "Как это работает", "How it works"),
+    ("help.close", "Понятно", "Got it"),
+    ("help.dashboard", "Профили — независимые установки Zapret, у каждой своя папка, стратегия и списки.\n\n• Добавить профиль — укажите имя и папку, где лежат general*.bat и winws.exe (обычно это zapret-discord-youtube).\n• Запустить/Остановить — старт стратегии через скрытый BAT; для winws (WinDivert) нужны права администратора, Windows покажет запрос UAC.\n• Стратегия — выпадающий список файлов general*.bat. Переключение перезапускает winws с новым набором параметров.\n• Установить службу — зарегистрировать стратегию как службу Windows: работает в фоне без окна. Пока служба установлена, обычный запуск заблокирован.\n• Автозапуск — стратегия стартует сама при открытии Integra.\n• Общие списки — профиль будет использовать общие списки доменов вместо своих.\n• Сделать активным — этот профиль считается основным: его статус показывается в трее и его данные видит расширение по умолчанию.\n• Индикатор здоровья показывает, похожа ли папка на установку Zapret.", "Profiles are independent Zapret installations, each with its own folder, strategy and lists.\n\n• Add profile — point to a folder containing general*.bat and winws.exe (usually zapret-discord-youtube).\n• Start/Stop — runs the strategy through a hidden BAT; winws (WinDivert) needs administrator rights, Windows will show a UAC prompt.\n• Strategy — the dropdown lists general*.bat files. Switching restarts winws with the new parameters.\n• Install service — registers the strategy as a Windows service so it runs in the background. While the service is installed, normal runs are blocked.\n• Autostart — the strategy starts automatically when Integra opens.\n• Shared lists — the profile uses the shared domain lists instead of its own.\n• Make active — this profile becomes the primary one: its status is shown in the tray and the extension reads it by default.\n• The health badge tells whether the folder looks like a Zapret install."),
+    ("help.apps", "Монитор приложений отвечает на вопрос «куда ходит эта программа?».\n\n• Начать отслеживание — Integra начинает снимать таблицы TCP/UDP-соединений системы (тот же источник, что у TCPView) и записывать уникальные подключения.\n• Фильтр — «Все процессы» или по имени: подстрока в имени процесса (например apex, discord). Новые процессы с таким именем подхватываются автоматически: можно нажать запись, а потом запустить игру.\n• Карточки сверху — активные приложения, которые сейчас забирают трафик: число соединений, ваши IP, основные адреса. Пульсирующая точка = соединения live.\n• Таблица — детальная история: протокол, адреса, домен (reverse DNS), метка порта (HTTPS, Steam, Game…), счётчик повторов.\n• «В обход»/«В исключения» — добавить хост из строки сразу в соответствующий список.\n• Экспорт CSV — сохранить сессию в файл.\n\nДанные не уходят из системы: reverse-DNS и таблицы соединений обрабатываются локально.", "The app monitor answers “where does this program connect to?”.\n\n• Start tracking — Integra polls the system TCP/UDP tables (same source as TCPView) and records unique connections.\n• Filter — “All processes” or by name: a substring of the process name (apex, discord). New matching processes are picked up automatically: press record first, then launch the game.\n• Top cards — apps currently consuming traffic: connection count, your IPs, top remotes. A pulsing dot means live connections.\n• Table — detailed history: protocol, addresses, hostname (reverse DNS), port label (HTTPS, Steam, Game…), hit counter.\n• “To bypass”/“To exclude” — add the host from a row straight to the matching list.\n• Export CSV — save the session to a file.\n\nNothing leaves your machine: reverse DNS and connection tables are processed locally."),
+    ("help.lists", "Списки — то, что winws не трогает и что трогает обязательно.\n\n• Обход (list-general) — домены/IP, к которым применяется обход DPI.\n• Исключения (list-exclude) — то, что обходить не нужно (например, российские CDN).\n• Остальные списки — специфичные наборы отдельных стратегий.\n\n• Переключатель «Общие/Индивидуальные» — выберите источник: общие списки для всех профилей или папка именно этого профиля.\n• Добавить записи — по одной в строке: домен, URL (превратится в домен), IP или CIDR. Валидация и дедупликация автоматические.\n• Заменить всё — вставить весь список целиком; повторы уберутся.\n• Удалить выбранное — очистка выбранных строк.\n\nИзменения вступают в силу после перезапуска стратегии или службы — подсказка об этом всегда под списком.", "Lists define what winws must bypass and what it must leave alone.\n\n• Bypass (list-general) — domains/IPs the DPI bypass applies to.\n• Exclude (list-exclude) — things that must not be bypassed (e.g. local CDNs).\n• Other lists — specific sets used by some strategies.\n\n• The “Shared/Individual” switch picks the source: shared lists used by every profile, or this profile's own folder.\n• Add entries — one per line: a domain, a URL (normalized to domain), an IP or CIDR. Validation and dedup are automatic.\n• Replace all — paste the whole list; duplicates are removed.\n• Remove selected — clear the selected lines.\n\nChanges take effect after restarting the strategy or service — the hint below the list reminds you."),
+    ("help.diagnostics", "Диагностика показывает, где именно ломается доступ.\n\n• Проверить — для каждого сайта выполняется цепочка: DNS → TCP → TLS → HTTP. Зелёный чип — этап пройден, красный — упал, серый — не выбран.\n• DNS — резолвится ли домен. TCP — устанавливается ли соединение с портом 443. TLS — настоящий TLS-handshake (rustls): если он ломается, DPI режет именно шифрованное рукопожатие. HTTP — HEAD-запрос по HTTPS.\n• Задержки — min/avg/max по rounds попыткам каждого этапа.\n• Свои сайты — добавьте то, что важно именно вам (игра, мессенджер).\n\nБенчмарк стратегий:\n• Запустить — Integra сама переберёт все general*.bat профиля: стоп → старт → прогрев → проверки сайтов → балл. Лучшей стратегии присваивается ★.\n• После прогона исходная стратегия (и её работа) восстанавливается. Отмена доступна в любой момент.\n• Пока установлена служба, бенчмарк недоступен — сначала удалите её.", "Diagnostics shows exactly where access breaks.\n\n• Run checks — for every site a chain runs: DNS → TCP → TLS → HTTP. Green chip — passed, red — failed, grey — not selected.\n• DNS — does the domain resolve. TCP — can we connect to port 443. TLS — a real TLS handshake (rustls): if it fails, DPI is cutting the encrypted handshake. HTTP — a HEAD request over HTTPS.\n• Latency — min/avg/max across rounds for each stage.\n• Custom sites — add what matters to you (a game, a messenger).\n\nStrategy benchmark:\n• Run — Integra iterates every general*.bat of the profile: stop → start → warmup → site checks → score. The best strategy gets a ★.\n• After the run the original strategy (and its state) is restored. You can cancel at any moment.\n• While a service is installed the benchmark is unavailable — remove the service first."),
+    ("help.extension", "Браузерное расширение добавляет сайты в списки прямо из Chrome/Edge.\n\n1. Включите мост кнопкой ниже.\n2. Скопируйте код привязки (он живёт 15 минут, обновляется по кнопке).\n3. В браузере: страница расширений → режим разработчика → «Загрузить распакованное» → папка browser-extension рядом с приложением.\n4. Откройте попап расширения и введите код.\n\nПосле привязки расширение умеет: показывать статус Zapret, добавлять текущий сайт в обход или в исключения, убирать его из списков и захватывать сразу все ссылки открытой вкладки (массовое добавление).\n\nБезопасность: мост слушает только 127.0.0.1, все запросы требуют токен, домены проходят ту же валидацию, что и в UI.", "The browser extension adds sites to the lists right from Chrome/Edge.\n\n1. Enable the bridge with the button below.\n2. Copy the pairing code (it lives 15 minutes; regenerate any time).\n3. In the browser: extensions page → Developer mode → “Load unpacked” → the browser-extension folder next to the app.\n4. Open the extension popup and enter the code.\n\nAfter pairing the extension can: show the Zapret status, add the current site to bypass or exclude, remove it from the lists, and capture every link of the open tab (bulk add).\n\nSecurity: the bridge listens on 127.0.0.1 only, every request needs the token, domains go through the same validation as in the UI."),
+    ("help.logs", "Журнал событий приложения.\n\n• Уровень — фильтр: ALL, DEBUG, INFO, SUCCESS, WARN, ERROR.\n• Стриминг — новые записи появляются сразу, включённый автоскролл держит конец списка.\n• Экспорт — сохранить журнал в файл.\n• Очистить — очистить текущий буфер.\n\nНужны технические детали вплоть до модулей кода? Включите режим разработчика (10 быстрых кликов по вкладке «Настройки») и откройте dev логи — отдельное окно консоли с полным потоком событий.", "The application event log.\n\n• Level — the filter: ALL, DEBUG, INFO, SUCCESS, WARN, ERROR.\n• Streaming — new entries appear instantly; auto-scroll keeps the end of the list in view.\n• Export — save the log to a file.\n• Clear — clear the current buffer.\n\nNeed technical details down to code modules? Enable developer mode (10 quick clicks on the “Settings” tab) and open the dev logs — a separate console window with the full event stream."),
+    ("help.settings", "Настройки приложения.\n\n• Язык/Тема — переключаются мгновенно и сохраняются.\n• Кастомизация темы — цвета каждого элемента, фоновые изображения, пресеты.\n• Панель вкладок — расположение (сверху/снизу/слева/справа), стиль (обычный/компактный/иконки).\n• Поведение — запуск свёрнутой, сворачивание в трей, автозапуск с Windows, уровень логов.\n• Мост — порт локального API для расширения.\n• Монитор — интервал опроса, reverse DNS, авто-подхват процессов.\n• Обслуживание Zapret — проверка и установка новых релизов Flowseal со переносом списков и backup/rollback.\n• Разработчику — появляется после включения режима разработчика.", "Application settings.\n\n• Language/Theme — switch instantly and persist.\n• Theme customization — per-element colors, background images, presets.\n• Tab bar — position (top/bottom/left/right), style (full/compact/icons).\n• Behavior — start minimized, close to tray, autostart with Windows, log level.\n• Bridge — the port of the local extension API.\n• Monitor — poll interval, reverse DNS, process auto-inclusion.\n• Zapret maintenance — check and install new Flowseal releases with list migration and backup/rollback.\n• Developer — appears after developer mode is enabled."),
+    // ── netmon traffic summary ────────────────────────────────
+    ("netmon.active_apps", "Активные приложения", "Active apps"),
+    ("netmon.active_now", "активно", "active"),
+    ("netmon.connections", "Соединений", "Connections"),
+    ("netmon.local_ips", "Ваши IP", "Your IPs"),
+    ("netmon.top_hosts", "Основные адреса", "Top remotes"),
+    ("netmon.summary_hint", "Приложения, которые сейчас забирают трафик — отсортированы по числу соединений.", "Apps currently consuming traffic — sorted by connections."),
+    ("netmon.new_processes", "Новых процессов: {count}", "New processes: {count}"),
+    // ── benchmark ─────────────────────────────────────────────
+    ("bench.title", "Бенчмарк стратегий", "Strategy benchmark"),
+    ("bench.desc", "Перебирает все general*.bat профиля: стоп → старт → прогрев → проверки сайтов → балл. Исходное состояние восстанавливается автоматически.", "Iterates every general*.bat of the profile: stop → start → warmup → site checks → score. The original state is restored automatically."),
+    ("bench.start", "Запустить бенчмарк", "Run benchmark"),
+    ("bench.cancel", "Отменить", "Cancel"),
+    ("bench.running", "Проверяется: {strategy} ({index}/{total})", "Testing: {strategy} ({index}/{total})"),
+    ("bench.best", "Лучшая стратегия", "Best strategy"),
+    ("bench.score", "Балл", "Score"),
+    ("bench.done", "Бенчмарк завершён. Лучшая: {strategy}", "Benchmark finished. Best: {strategy}"),
+    ("bench.cancelled", "Бенчмарк отменён", "Benchmark cancelled"),
+    ("bench.conflict", "Установлена служба — сначала удалите её: бенчмарк работает в обычном режиме.", "A service is installed — remove it first: the benchmark runs in normal mode."),
+    ("bench.warmup", "Прогрев…", "Warming up…"),
+    ("bench.checking", "Проверка сайтов…", "Checking sites…"),
+    ("bench.restore", "Восстановление исходного состояния…", "Restoring original state…"),
+    ("bench.success", "Успешных", "Successful"),
+    ("bench.avg_latency", "Средняя задержка", "Average latency"),
+    ("bench.error", "Ошибка: {error}", "Error: {error}"),
+    ("bench.no_strategies", "В профиле нет стратегий general*.bat", "No general*.bat strategies in the profile"),
+    // ── zapret maintenance ────────────────────────────────────
+    ("maint.check", "Проверить обновления", "Check for updates"),
+    ("maint.latest", "Последний релиз: {version}", "Latest release: {version}"),
+    ("maint.installed", "Установлена: {version}", "Installed: {version}"),
+    ("maint.not_installed_meta", "Версия не записана (установка вне Integra)", "Version unknown (installed outside Integra)"),
+    ("maint.up_to_date", "У вас последняя версия", "You are on the latest version"),
+    ("maint.download", "Скачать и установить {version}", "Download & install {version}"),
+    ("maint.downloading", "Скачивание… {percent}%", "Downloading… {percent}%"),
+    ("maint.extracting", "Распаковка…", "Extracting…"),
+    ("maint.migrating", "Перенос списков…", "Migrating lists…"),
+    ("maint.updated", "Zapret {version} установлен, списки перенесены", "Zapret {version} installed, lists migrated"),
+    ("maint.failed", "Не удалось: {error}", "Failed: {error}"),
+    ("maint.rollback", "Ошибка установки — исходная установка восстановлена", "Install failed — the original installation was restored"),
+    ("maint.published", "Опубликовано: {date}", "Published: {date}"),
+    ("maint.running_profile", "Профиль запущен — остановите его перед обновлением", "The profile is running — stop it before updating"),
+    ("maint.network_error", "Ошибка сети: {error}", "Network error: {error}"),
+    // ── misc additions ────────────────────────────────────────
+    ("app.relaunch_admin", "Перезапустить от администратора", "Restart as administrator"),
+    ("app.relaunched", "Запрошен перезапуск с правами администратора", "Elevated restart requested"),
+    ("app.confirm_exit", "Выйти из Integra?", "Quit Integra?"),
+    ("diag.kinds", "Проверки", "Checks"),
+    ("diag.tls_note", "TLS — настоящий handshake (rustls), HTTP — HEAD по HTTPS.", "TLS — a real handshake (rustls), HTTP — HEAD over HTTPS."),
+    ("diag.latency_ms", "{ms} мс", "{ms} ms"),
+    ("diag.sites_for", "Сайты для проверки", "Sites to check"),
 ];
 
 pub fn set_language(code: &str) -> &'static str {
@@ -291,9 +418,20 @@ pub fn bundle() -> HashMap<&'static str, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// The current language is process-global state; serialize the tests
+    /// that touch it so parallel execution stays deterministic.
+    static LANG_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lang_guard() -> std::sync::MutexGuard<'static, ()> {
+        LANG_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn defaults_to_russian_and_switches() {
+        let _guard = lang_guard();
+        set_language("ru");
         assert_eq!(tr("nav.dashboard"), "Профили");
         set_language("en");
         assert_eq!(tr("nav.dashboard"), "Dashboard");
@@ -303,6 +441,7 @@ mod tests {
 
     #[test]
     fn interpolates_args() {
+        let _guard = lang_guard();
         set_language("ru");
         assert_eq!(
             tr_with("zapret.started", &[("strategy", "general.bat"), ("pid", "4242")]),
@@ -317,9 +456,13 @@ mod tests {
 
     #[test]
     fn bundle_covers_all_keys() {
+        let _guard = lang_guard();
         set_language("en");
         let bundle = bundle();
         assert_eq!(bundle.len(), TABLE.len());
         assert_eq!(bundle["nav.apps"], "Apps");
+        // every help entry is present and non-trivial
+        assert!(bundle["help.dashboard"].len() > 100);
+        set_language("ru");
     }
 }

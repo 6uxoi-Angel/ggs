@@ -1,1 +1,267 @@
-<!doctype html><title>placeholder</title>
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Integra</title>
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body class="theme-dark_accent pos-top style-full">
+  <div id="app" aria-live="polite">
+    <!-- ══ TAB BAR (taskbar) ══ -->
+    <nav id="taskbar" aria-label="main navigation">
+      <div class="brand" title="Integra">
+        <span class="brand-logo">I</span>
+        <span class="brand-name" data-i18n="app.brand">Integra</span>
+      </div>
+      <div id="tab-buttons" role="tablist"></div>
+      <div id="tab-indicator" aria-hidden="true"></div>
+    </nav>
+
+    <!-- ══ CONTENT ══ -->
+    <main id="content">
+      <section id="page-dashboard" class="page" hidden>
+        <header class="page-header">
+          <div>
+            <h2 data-i18n="dashboard.title"></h2>
+            <p class="muted" data-i18n="dashboard.subtitle"></p>
+          </div>
+          <div class="header-actions">
+            <button class="btn primary" id="btn-add-profile">＋ <span data-i18n="dashboard.add_profile"></span></button>
+            <button class="btn ghost icon-only help-btn" data-help="dashboard" title="?">?</button>
+          </div>
+        </header>
+        <div id="profiles-grid" class="cards-grid"></div>
+      </section>
+
+      <section id="page-apps" class="page" hidden>
+        <header class="page-header">
+          <div>
+            <h2 data-i18n="netmon.title"></h2>
+            <p class="muted" data-i18n="netmon.subtitle"></p>
+          </div>
+          <div class="header-actions">
+            <button class="btn primary" id="btn-netmon-toggle"></button>
+            <button class="btn ghost" id="btn-netmon-csv" data-i18n="netmon.export_csv"></button>
+            <button class="btn ghost icon-only help-btn" data-help="apps" title="?">?</button>
+          </div>
+        </header>
+
+        <div class="card" id="netmon-controls">
+          <div class="row gap wrap">
+            <label class="field">
+              <span class="field-label" data-i18n="netmon.filter_all"></span>
+              <select id="netmon-filter-mode">
+                <option value="all" data-i18n="netmon.filter_all"></option>
+                <option value="name" data-i18n="netmon.filter_name"></option>
+              </select>
+            </label>
+            <label class="field grow" id="netmon-name-wrap">
+              <span class="field-label" data-i18n="netmon.filter_hint"></span>
+              <input id="netmon-filter-name" placeholder="apex, discord…" />
+            </label>
+            <span id="netmon-state" class="pill"></span>
+          </div>
+        </div>
+
+        <h3 class="section-title" data-i18n="netmon.active_apps"></h3>
+        <p class="muted small" data-i18n="netmon.summary_hint"></p>
+        <div id="netmon-summary" class="cards-grid"></div>
+
+        <h3 class="section-title" data-i18n="netmon.process"></h3>
+        <div class="card table-card">
+          <div class="row gap">
+            <input id="netmon-table-filter" class="grow" data-i18n-placeholder="common.search" />
+            <span id="netmon-count" class="muted small"></span>
+          </div>
+          <div class="table-wrap" id="netmon-table-wrap">
+            <table class="table" id="netmon-table">
+              <thead><tr>
+                <th data-i18n="netmon.process"></th><th>PID</th>
+                <th data-i18n="netmon.proto"></th><th data-i18n="netmon.remote"></th>
+                <th data-i18n="netmon.host"></th><th data-i18n="netmon.hits"></th>
+                <th data-i18n="common.actions"></th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-lists" class="page" hidden>
+        <header class="page-header">
+          <div>
+            <h2 data-i18n="lists.title"></h2>
+            <p class="muted" id="lists-source-label"></p>
+          </div>
+          <div class="header-actions">
+            <button class="btn ghost icon-only help-btn" data-help="lists" title="?">?</button>
+          </div>
+        </header>
+        <div class="row gap wrap" id="lists-toolbar">
+          <div class="segmented" id="lists-source-switch">
+            <button data-shared="0" data-i18n="lists.individual"></button>
+            <button data-shared="1" data-i18n="lists.shared"></button>
+          </div>
+          <span class="muted small" data-i18n="lists.shared_hint"></span>
+        </div>
+        <div class="tabs-mini" id="lists-tabs"></div>
+        <div class="card">
+          <div class="row gap wrap">
+            <input id="lists-filter" class="grow" data-i18n-placeholder="lists.filter_placeholder" />
+            <button class="btn ghost" id="btn-lists-remove-selected" data-i18n="lists.remove_selected"></button>
+            <button class="btn ghost" id="btn-lists-replace" data-i18n="lists.add_entries"></button>
+          </div>
+          <div class="table-wrap max-h-96" id="lists-entries-wrap">
+            <table class="table" id="lists-table">
+              <thead><tr><th class="w-8"></th><th>#</th><th data-i18n="common.name"></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="row gap">
+            <span id="lists-count" class="muted small"></span>
+            <span class="grow"></span>
+            <span class="muted small" data-i18n="lists.restart_hint"></span>
+          </div>
+        </div>
+        <div class="card">
+          <label class="field-label" data-i18n="lists.add_entries"></label>
+          <textarea id="lists-add-input" rows="4" data-i18n-placeholder="lists.bulk_placeholder"></textarea>
+          <div class="row gap">
+            <button class="btn primary" id="btn-lists-add" data-i18n="lists.add_entries"></button>
+            <span id="lists-report" class="muted small grow"></span>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-diagnostics" class="page" hidden>
+        <header class="page-header">
+          <div>
+            <h2 data-i18n="diag.title"></h2>
+            <p class="muted" data-i18n="diag.subtitle"></p>
+          </div>
+          <div class="header-actions">
+            <button class="btn ghost icon-only help-btn" data-help="diagnostics" title="?">?</button>
+          </div>
+        </header>
+
+        <div class="card">
+          <div class="row gap wrap">
+            <span class="field-label" data-i18n="diag.kinds"></span>
+            <label class="check"><input type="checkbox" id="k-dns" checked /><span>DNS</span></label>
+            <label class="check"><input type="checkbox" id="k-tcp" checked /><span>TCP</span></label>
+            <label class="check"><input type="checkbox" id="k-tls" checked /><span>TLS</span></label>
+            <label class="check"><input type="checkbox" id="k-http" checked /><span>HTTP</span></label>
+            <span class="grow"></span>
+            <label class="field inline"><span data-i18n="diag.rounds"></span>
+              <input type="number" id="diag-rounds" min="1" max="10" value="2" class="w-16" /></label>
+            <label class="field inline"><span data-i18n="diag.timeout"></span>
+              <input type="number" id="diag-timeout" min="1" max="15" value="4" class="w-16" /></label>
+            <button class="btn primary" id="btn-diag-run" data-i18n="diag.run"></button>
+          </div>
+          <p class="muted small" data-i18n="diag.tls_note"></p>
+        </div>
+        <div id="diag-results" class="cards-grid"></div>
+
+        <div class="card">
+          <h3 class="section-title" data-i18n="bench.title"></h3>
+          <p class="muted small" data-i18n="bench.desc"></p>
+          <div class="row gap wrap">
+            <select id="bench-profile" class="min-w-40"></select>
+            <button class="btn primary" id="btn-bench-start" data-i18n="bench.start"></button>
+            <button class="btn danger" id="btn-bench-cancel" data-i18n="bench.cancel" hidden></button>
+            <span id="bench-state" class="muted small grow"></span>
+          </div>
+          <div id="bench-progress-bar" class="progress" hidden><div class="progress-fill"></div></div>
+          <div id="bench-results"></div>
+        </div>
+
+        <div class="card">
+          <h3 class="section-title" data-i18n="diag.custom_sites"></h3>
+          <div class="row gap wrap">
+            <input id="diag-site-name" class="w-32" data-i18n-placeholder="common.name" />
+            <input id="diag-site-host" class="grow" placeholder="example.com" />
+            <input type="number" id="diag-site-port" min="1" max="65535" value="443" class="w-24" />
+            <button class="btn ghost" id="btn-diag-add-site" data-i18n="diag.add_site"></button>
+          </div>
+          <div id="diag-sites-list" class="chips"></div>
+        </div>
+      </section>
+
+      <section id="page-extension" class="page" hidden>
+        <header class="page-header">
+          <div>
+            <h2 data-i18n="extension.title"></h2>
+            <p class="muted" data-i18n="extension.subtitle"></p>
+          </div>
+          <div class="header-actions">
+            <button class="btn ghost icon-only help-btn" data-help="extension" title="?">?</button>
+          </div>
+        </header>
+        <div class="card center-col">
+          <span id="bridge-state" class="pill big"></span>
+          <div class="row gap wrap center">
+            <button class="btn primary" id="btn-bridge-toggle"></button>
+          </div>
+          <div id="pairing-box" class="pairing-box" hidden>
+            <label class="field-label" data-i18n="extension.pairing_code"></label>
+            <div class="pairing-code" id="pairing-code">······</div>
+            <div class="row gap center">
+              <span class="muted small" id="pairing-expires"></span>
+              <button class="btn ghost" id="btn-pair-regen" data-i18n="extension.regenerate"></button>
+            </div>
+          </div>
+          <pre class="instructions" id="bridge-instructions"></pre>
+        </div>
+      </section>
+
+      <section id="page-logs" class="page" hidden>
+        <header class="page-header">
+          <div>
+            <h2 data-i18n="logs.title"></h2>
+          </div>
+          <div class="header-actions">
+            <button class="btn ghost" id="btn-logs-clear" data-i18n="logs.clear"></button>
+            <button class="btn ghost" id="btn-logs-export" data-i18n="logs.export"></button>
+            <button class="btn ghost icon-only help-btn" data-help="logs" title="?">?</button>
+          </div>
+        </header>
+        <div class="card">
+          <div class="row gap wrap" id="logs-filters">
+            <div class="segmented" id="logs-levels"></div>
+            <label class="check"><input type="checkbox" id="logs-autoscroll" checked /><span data-i18n="logs.autoscroll"></span></label>
+          </div>
+          <div class="logs-wrap max-h-96" id="logs-list"></div>
+        </div>
+      </section>
+
+      <section id="page-settings" class="page" hidden>
+        <header class="page-header">
+          <div>
+            <h2 data-i18n="settings.title"></h2>
+          </div>
+          <div class="header-actions">
+            <button class="btn ghost icon-only help-btn" data-help="settings" title="?">?</button>
+          </div>
+        </header>
+        <div id="settings-body"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ══ MODAL ══ -->
+  <div id="modal-backdrop" hidden>
+    <div id="modal" role="dialog" aria-modal="true">
+      <h3 id="modal-title"></h3>
+      <div id="modal-body"></div>
+      <div id="modal-actions" class="row gap end"></div>
+    </div>
+  </div>
+  <div id="toasts"></div>
+  <div id="mock-banner" hidden>PREVIEW (mock backend)</div>
+
+  <script src="js/i18n-data.js"></script>
+  <script src="js/mock.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

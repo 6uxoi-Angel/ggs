@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="color-scheme" content="dark" />
+  <title>Integra</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="glow glow-top" aria-hidden="true"></div>
+  <div class="glow glow-bottom" aria-hidden="true"></div>
+
+  <!-- ── Pairing view ─────────────────────────────────────── -->
+  <main id="view-pair" class="view hidden" aria-labelledby="pair-title">
+    <header class="head">
+      <img class="logo" src="icons/icon-48.png" alt="" width="34" height="34" />
+      <div class="head-text">
+        <h1 id="pair-title">Integra</h1>
+        <p class="sub" id="pair-sub"></p>
+      </div>
+    </header>
+
+    <section class="glass">
+      <p class="hint" id="pair-hint"></p>
+      <div class="row">
+        <input id="pair-code" class="code-input" type="text" inputmode="numeric"
+               maxlength="6" placeholder="••••••" autocomplete="one-time-code" />
+        <button id="pair-btn" class="btn primary"></button>
+      </div>
+
+      <div id="pair-port-row" class="port-row hidden">
+        <label class="port-label" for="pair-port"><span id="pair-port-label"></span></label>
+        <div class="row">
+          <input id="pair-port" type="number" min="1024" max="65535" step="1" value="8765" />
+          <button id="pair-port-check" class="btn ghost"></button>
+        </div>
+      </div>
+
+      <p id="pair-error" class="msg error hidden" role="alert"></p>
+      <p id="pair-success" class="msg ok hidden" role="status"></p>
+    </section>
+
+    <footer class="foot">
+      <span id="pair-foot"></span>
+    </footer>
+  </main>
+
+  <!-- ── Main view ────────────────────────────────────────── -->
+  <main id="view-main" class="view hidden" aria-labelledby="main-title">
+    <header class="head">
+      <img class="logo" src="icons/icon-48.png" alt="" width="34" height="34" />
+      <div class="head-text">
+        <h1 id="main-title">Integra</h1>
+        <p class="sub"><span id="zapret-dot" class="dot"></span><span id="zapret-state"></span></p>
+      </div>
+      <button id="refresh-btn" class="icon-btn" type="button">↻</button>
+    </header>
+
+    <div id="banner" class="banner hidden" role="alert"></div>
+
+    <section class="glass">
+      <div class="kv"><span class="k" id="label-strategy"></span><span class="v" id="strategy-value">—</span></div>
+      <div class="kv"><span class="k" id="label-counts"></span></div>
+      <div id="counts" class="chips"></div>
+    </section>
+
+    <section class="glass">
+      <div class="kv">
+        <span class="k" id="label-profile"></span>
+        <select id="profile-select" class="select" aria-label="profile"></select>
+      </div>
+    </section>
+
+    <section class="glass">
+      <div class="kv"><span class="k" id="label-target"></span><span class="v host" id="target-host">—</span></div>
+      <input id="domain-input" type="text" spellcheck="false" autocomplete="off" />
+      <div class="grid3">
+        <button id="add-bypass" class="btn primary"></button>
+        <button id="add-exclude" class="btn"></button>
+        <button id="remove-domain" class="btn danger"></button>
+      </div>
+    </section>
+
+    <section class="glass">
+      <div class="seg" role="group" aria-label="capture mode">
+        <button id="seg-bypass" class="seg-btn active" type="button" data-mode="bypass"></button>
+        <button id="seg-exclude" class="seg-btn" type="button" data-mode="exclude"></button>
+      </div>
+      <button id="capture-btn" class="btn wide"></button>
+    </section>
+
+    <footer class="foot">
+      <span id="foot-meta"></span>
+      <span class="sep">·</span>
+      <button id="disconnect-btn" class="link-btn" type="button"></button>
+    </footer>
+  </main>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
