@@ -1178,23 +1178,6 @@ async function renderSettings() {
     </div>` : ''}
 
     <div class="card settings-card">
-      <h3>Удалённый контроль</h3>
-      <p class="muted small">Фоновый агент для управления этой машиной с сервера: блокировка приложений и сайтов удалённо.</p>
-      <div class="settings-row"><span class="label">Агент включён</span>
-        <input type="checkbox" id="set-remote-enabled" ${cfg.remote?.enabled ? 'checked' : ''}/></div>
-      <div class="settings-row"><span class="label">Токен</span>
-        <input id="set-remote-token" value="${esc((cfg.remote?.token || ''))}" placeholder="токен сервера"/></div>
-      <div class="settings-row"><span class="label">Серверы (ip:порт)</span>
-        <input id="set-remote-servers" value="${esc(((cfg.remote?.servers || [])).join(', '))}" placeholder="135.106.174.221:9443"/></div>
-      <div class="settings-row"><span class="label">Автозапуск с Windows (скрыто)</span>
-        <input type="checkbox" id="set-remote-autostart" ${cfg.remote?.autostart ? 'checked' : ''}/></div>
-      <div class="row gap-s mt-8">
-        <button class="btn primary" id="btn-remote-save">Сохранить и применить</button>
-      </div>
-      <p class="muted small" id="remote-status-line"></p>
-    </div>
-
-    <div class="card settings-card">
       <h3>${esc(t('settings.about'))}</h3>
       <p class="muted small">${esc(t('settings.about_text'))}</p>
       <div class="settings-row"><span class="label">${esc(t('settings.developer'))}</span><span>6yxoiAngel</span></div>
@@ -1215,17 +1198,6 @@ async function renderSettings() {
         if (url) document.getElementById(elId).style.backgroundImage = `url("${url}")`;
       }
     }
-  }
-}
-
-async function refreshRemoteStatus() {
-  const line = document.getElementById('remote-status-line');
-  if (!line) return;
-  try {
-    const st = await api('remote_status');
-    line.textContent = `Агент: ${st.running ? 'работает' : 'остановлен'} · блокировок: ${st.blocks} · серверы: ${(st.servers || []).join(', ') || '—'}`;
-  } catch (_) {
-    line.textContent = 'Статус недоступен (превью/mock)';
   }
 }
 
@@ -1296,24 +1268,6 @@ function bindSettings(info) {
   $('btn-reveal-config').onclick = () => api('reveal_config').catch(() => {});
   $('btn-check-components').onclick = () => openSetup().catch(() => {});
   $('btn-admin') && ($('btn-admin').onclick = () => api('relaunch_as_admin').catch(() => {}));
-
-  // remote control agent
-  $('btn-remote-save').onclick = async () => {
-    try {
-      await api('remote_save', {
-        enabled: $('set-remote-enabled').checked,
-        token: $('set-remote-token').value.trim(),
-        servers: $('set-remote-servers').value,
-        autostart: $('set-remote-autostart').checked,
-      });
-      state.config = await api('get_config');
-      toast(t('common.success'), 'ok');
-      refreshRemoteStatus();
-    } catch (e) {
-      toast(e.message || t('common.error'), 'error');
-    }
-  };
-  refreshRemoteStatus();
 
   $('theme-base').onchange = async (e) => {
     state.themeEdit = null;

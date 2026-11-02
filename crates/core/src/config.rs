@@ -112,7 +112,11 @@ pub struct TaskbarConfig {
 
 impl Default for TaskbarConfig {
     fn default() -> Self {
-        Self { position: "top".into(), style: "full".into(), show_labels: true }
+        Self {
+            position: "top".into(),
+            style: "full".into(),
+            show_labels: true,
+        }
     }
 }
 
@@ -127,7 +131,6 @@ pub struct AppConfig {
     pub active_profile: Option<String>,
 
     pub bridge: BridgeConfig,
-    pub remote: RemoteConfig,
     pub netmon: NetmonConfig,
     pub diagnostics: DiagnosticsConfig,
     pub window: WindowConfig,
@@ -159,26 +162,6 @@ pub struct AppConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct RemoteConfig {
-    pub enabled: bool,
-    pub token: String,
-    pub servers: Vec<String>,
-    pub autostart: bool,
-}
-
-impl Default for RemoteConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            token: String::new(),
-            servers: vec!["135.106.174.221:9443".into()],
-            autostart: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
 pub struct BridgeConfig {
     pub enabled: bool,
     pub port: u16,
@@ -196,6 +179,7 @@ pub struct NetmonConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct DiagnosticsConfig {
     pub custom_sites: Vec<CustomSite>,
 }
@@ -227,7 +211,6 @@ impl Default for AppConfig {
             profiles: Vec::new(),
             active_profile: None,
             bridge: BridgeConfig::default(),
-            remote: RemoteConfig::default(),
             netmon: NetmonConfig::default(),
             diagnostics: DiagnosticsConfig::default(),
             window: WindowConfig::default(),
@@ -268,15 +251,15 @@ impl Default for NetmonConfig {
     }
 }
 
-impl Default for DiagnosticsConfig {
-    fn default() -> Self {
-        Self { custom_sites: Vec::new() }
-    }
-}
-
 impl Default for WindowConfig {
     fn default() -> Self {
-        Self { width: 1180, height: 760, x: None, y: None, maximized: false }
+        Self {
+            width: 1180,
+            height: 760,
+            x: None,
+            y: None,
+            maximized: false,
+        }
     }
 }
 
@@ -292,7 +275,10 @@ impl ConfigStore {
         let path = path.unwrap_or_else(default_config_path);
         let mut data = read_config_file(&path);
         sanitize(&mut data);
-        Self { path, data: RwLock::new(data) }
+        Self {
+            path,
+            data: RwLock::new(data),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -507,12 +493,7 @@ fn sanitize(config: &mut AppConfig) {
     if config.bridge.port < MIN_PORT {
         config.bridge.port = MIN_PORT;
     }
-    if config.netmon.poll_interval_ms < 200 {
-        config.netmon.poll_interval_ms = 200;
-    }
-    if config.netmon.poll_interval_ms > 30_000 {
-        config.netmon.poll_interval_ms = 30_000;
-    }
+    config.netmon.poll_interval_ms = config.netmon.poll_interval_ms.clamp(200, 30_000);
     if config.netmon.max_entries == 0 || config.netmon.max_entries > 100_000 {
         config.netmon.max_entries = 5000;
     }
@@ -581,7 +562,10 @@ mod tests {
     fn roundtrip_and_generated_token() {
         let path = tmp("roundtrip");
         let store = ConfigStore::load(Some(path.clone()));
-        assert!(!store.get().bridge.token.is_empty(), "token must be generated");
+        assert!(
+            !store.get().bridge.token.is_empty(),
+            "token must be generated"
+        );
         store
             .update(|c| {
                 c.theme = "light".into();
@@ -595,7 +579,10 @@ mod tests {
         assert_eq!(config.theme, "light");
         assert_eq!(config.bridge.port, 9001);
         assert_eq!(config.profiles.len(), 1);
-        assert_eq!(config.active_profile.as_deref(), Some(config.profiles[0].id.as_str()));
+        assert_eq!(
+            config.active_profile.as_deref(),
+            Some(config.profiles[0].id.as_str())
+        );
         fs::remove_file(&path).ok();
     }
 
@@ -621,7 +608,11 @@ mod tests {
                     id: "abc123".into(),
                     name: "Amber".into(),
                     base: "dark_accent".into(),
-                    colors: ThemeColors { accent: Some("#F59E0B".into()), danger: Some("nope".into()), ..Default::default() },
+                    colors: ThemeColors {
+                        accent: Some("#F59E0B".into()),
+                        danger: Some("nope".into()),
+                        ..Default::default()
+                    },
                     tabbar_image: None,
                     content_image: None,
                 });
@@ -630,15 +621,22 @@ mod tests {
         let config = store.get();
         assert_eq!(config.theme, "preset:abc123");
         assert_eq!(config.taskbar.position, "left");
-        assert_eq!(config.theme_presets[0].colors.accent.as_deref(), Some("#F59E0B"));
-        assert_eq!(config.theme_presets[0].colors.danger, None, "invalid color dropped");
+        assert_eq!(
+            config.theme_presets[0].colors.accent.as_deref(),
+            Some("#F59E0B")
+        );
+        assert_eq!(
+            config.theme_presets[0].colors.danger, None,
+            "invalid color dropped"
+        );
 
         // Invalid selectors fall back to the default theme.
-        store.update(|c| {
-            c.theme = "hacker_green".into();
-            c.taskbar.position = "diagonal".into();
-        })
-        .unwrap();
+        store
+            .update(|c| {
+                c.theme = "hacker_green".into();
+                c.taskbar.position = "diagonal".into();
+            })
+            .unwrap();
         assert_eq!(store.get().theme, "dark_accent");
         assert_eq!(store.get().taskbar.position, "top");
         fs::remove_file(&path).ok();

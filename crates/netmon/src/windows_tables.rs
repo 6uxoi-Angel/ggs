@@ -130,7 +130,7 @@ unsafe fn tcp_table(af: ADDRESS_FAMILY, proto: Protocol) -> Vec<Connection> {
                     ipv4_from_raw(row.dwRemoteAddr),
                     port_from_raw(row.dwRemotePort),
                 ))),
-                state: TcpState::from_raw(row.dwState as u32), // ИСПРАВЛЕНИЕ 2: Убрано .0
+                state: TcpState::from_raw(row.dwState), // ИСПРАВЛЕНИЕ 2: Убрано .0
                 pid: row.dwOwningPid,
             });
         }
@@ -153,7 +153,7 @@ unsafe fn tcp_table(af: ADDRESS_FAMILY, proto: Protocol) -> Vec<Connection> {
                     0, // ИСПРАВЛЕНИЕ 3: Добавлен flowinfo
                     row.dwRemoteScopeId,
                 ))),
-                state: TcpState::from_raw(row.dwState as u32), // ИСПРАВЛЕНИЕ 2: Убрано .0
+                state: TcpState::from_raw(row.dwState), // ИСПРАВЛЕНИЕ 2: Убрано .0
                 pid: row.dwOwningPid,
             });
         }

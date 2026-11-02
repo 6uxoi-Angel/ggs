@@ -31,7 +31,12 @@ fn default_port() -> u16 {
 
 impl Site {
     pub fn builtin(id: &str, name: &str, host: &str) -> Site {
-        Site { id: id.into(), name: name.into(), host: host.into(), port: 443 }
+        Site {
+            id: id.into(),
+            name: name.into(),
+            host: host.into(),
+            port: 443,
+        }
     }
 }
 
@@ -117,7 +122,11 @@ fn stats(samples: &[u64]) -> Option<LatencyStats> {
 }
 
 /// Measure TCP latency (DNS + handshake), mirroring the legacy Integra ping.
-pub fn measure_tcp_latency(host: &str, port: u16, timeout: Duration) -> (bool, Option<u64>, Option<String>) {
+pub fn measure_tcp_latency(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+) -> (bool, Option<u64>, Option<String>) {
     let started = Instant::now();
     let addrs = match resolve_host(host, timeout) {
         Ok(addrs) => addrs,
@@ -134,7 +143,11 @@ pub fn measure_tcp_latency(host: &str, port: u16, timeout: Duration) -> (bool, O
             Err(err) => last_error = Some(err.to_string()),
         }
     }
-    (false, None, Some(last_error.unwrap_or_else(|| integra_core::i18n::tr("network.unreachable"))))
+    (
+        false,
+        None,
+        Some(last_error.unwrap_or_else(|| integra_core::i18n::tr("network.unreachable"))),
+    )
 }
 
 // ── TLS / HTTP (real handshake via rustls) ─────────────────
@@ -178,10 +191,14 @@ pub fn parse_http_status(head: &str) -> Option<u16> {
 }
 
 /// One HTTPS probe: TCP connect + real TLS handshake (rustls + webpki-roots)
-/// + HTTPS HEAD request. Returns `(status, total_ms)`; `status` is None when
-/// the handshake and the write succeeded but no parseable response arrived
-/// (which still proves TLS works).
-pub fn https_probe(host: &str, addr: SocketAddr, timeout: Duration) -> Result<(Option<u16>, u64), String> {
+/// followed by an HTTPS HEAD request. Returns `(status, total_ms)`; `status`
+/// is None when the handshake and the write succeeded but no parseable response
+/// arrived (which still proves TLS works).
+pub fn https_probe(
+    host: &str,
+    addr: SocketAddr,
+    timeout: Duration,
+) -> Result<(Option<u16>, u64), String> {
     let server_name = ServerName::try_from(host.to_string())
         .map_err(|_| integra_core::i18n::tr("core.invalid_domain"))?;
     let conn = rustls::ClientConnection::new(tls_client_config(), server_name)
@@ -189,15 +206,17 @@ pub fn https_probe(host: &str, addr: SocketAddr, timeout: Duration) -> Result<(O
 
     let started = Instant::now();
     let tcp = TcpStream::connect_timeout(&addr, timeout).map_err(io_error_message)?;
-    tcp.set_read_timeout(Some(timeout)).map_err(io_error_message)?;
-    tcp.set_write_timeout(Some(timeout)).map_err(io_error_message)?;
+    tcp.set_read_timeout(Some(timeout))
+        .map_err(io_error_message)?;
+    tcp.set_write_timeout(Some(timeout))
+        .map_err(io_error_message)?;
 
     let mut tls = rustls::StreamOwned::new(conn, tcp);
     let request = format!(
         "HEAD / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Integra-Diag\r\nAccept: */*\r\nConnection: close\r\n\r\n"
     );
     tls.write_all(request.as_bytes())
-        .map_err(|e| io_error_message(e))?;
+        .map_err(io_error_message)?;
 
     let mut buf = [0u8; 1024];
     let mut received = 0usize;
@@ -244,7 +263,12 @@ fn probe_all_addrs(
 }
 
 /// Run the requested checks against one site, `rounds` times each.
-pub fn check_site(site: &Site, kinds: &[CheckKind], rounds: u32, timeout: Duration) -> Vec<CheckOutcome> {
+pub fn check_site(
+    site: &Site,
+    kinds: &[CheckKind],
+    rounds: u32,
+    timeout: Duration,
+) -> Vec<CheckOutcome> {
     let rounds = rounds.clamp(1, 10);
     let mut outcomes = Vec::new();
     for kind in kinds {
@@ -295,7 +319,13 @@ pub fn check_site(site: &Site, kinds: &[CheckKind], rounds: u32, timeout: Durati
                         }
                     }
                 }
-                CheckOutcome { kind: *kind, ok: error.is_none(), latency: stats(&samples), addrs: vec![], error }
+                CheckOutcome {
+                    kind: *kind,
+                    ok: error.is_none(),
+                    latency: stats(&samples),
+                    addrs: vec![],
+                    error,
+                }
             }
             CheckKind::Tls => {
                 let mut samples = Vec::new();
@@ -309,7 +339,13 @@ pub fn check_site(site: &Site, kinds: &[CheckKind], rounds: u32, timeout: Durati
                         }
                     }
                 }
-                CheckOutcome { kind: *kind, ok: error.is_none(), latency: stats(&samples), addrs: vec![], error }
+                CheckOutcome {
+                    kind: *kind,
+                    ok: error.is_none(),
+                    latency: stats(&samples),
+                    addrs: vec![],
+                    error,
+                }
             }
             CheckKind::Http => {
                 let mut samples = Vec::new();
@@ -325,7 +361,13 @@ pub fn check_site(site: &Site, kinds: &[CheckKind], rounds: u32, timeout: Durati
                         }
                     }
                 }
-                CheckOutcome { kind: *kind, ok: error.is_none(), latency: stats(&samples), addrs: vec![], error }
+                CheckOutcome {
+                    kind: *kind,
+                    ok: error.is_none(),
+                    latency: stats(&samples),
+                    addrs: vec![],
+                    error,
+                }
             }
         });
     }
@@ -344,7 +386,9 @@ mod tests {
 
     #[test]
     fn dns_failure_is_reported() {
-        assert!(resolve_host("definitely-not-a-real-host.invalid", Duration::from_secs(2)).is_err());
+        assert!(
+            resolve_host("definitely-not-a-real-host.invalid", Duration::from_secs(2)).is_err()
+        );
     }
 
     #[test]
@@ -367,7 +411,12 @@ mod tests {
         let site = Site::builtin("x", "X", "localhost");
         // Both stages must be attempted against a real (closed) port and
         // report a proper error, not a "coming later" stub.
-        let outcomes = check_site(&site, &[CheckKind::Tls, CheckKind::Http], 1, Duration::from_secs(2));
+        let outcomes = check_site(
+            &site,
+            &[CheckKind::Tls, CheckKind::Http],
+            1,
+            Duration::from_secs(2),
+        );
         for outcome in outcomes {
             assert!(!outcome.ok);
             let error = outcome.error.unwrap_or_default();

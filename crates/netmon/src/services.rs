@@ -19,7 +19,7 @@ pub fn label_for_port(port: u16) -> Option<&'static str> {
         3479 => "STUN",
         3480 => "STUN-TLS",
         3481 => "STUN-TLS",
-        4380 | 4381 | 4382 | 4383 | 4384 => "Steam",
+        4380..=4384 => "Steam",
         5222 => "XMPP",
         5223 => "XMPP-SSL",
         8080 => "HTTP-alt",

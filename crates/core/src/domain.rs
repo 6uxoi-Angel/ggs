@@ -65,10 +65,7 @@ pub fn normalize_host(raw: &str, allow_ip: bool) -> Result<String, DomainError> 
     };
 
     // Cut path/query/fragment.
-    let authority = authority
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(authority);
+    let authority = authority.split(['/', '?', '#']).next().unwrap_or(authority);
 
     let host = if let Some(rest) = authority.strip_prefix('[') {
         // IPv6 literal: [::1]:443
@@ -79,7 +76,11 @@ pub fn normalize_host(raw: &str, allow_ip: bool) -> Result<String, DomainError> 
     } else {
         // Strip :port from host:port (only one colon allowed outside brackets).
         match authority.rsplit_once(':') {
-            Some((maybe_host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => maybe_host,
+            Some((maybe_host, port))
+                if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                maybe_host
+            }
             _ => authority,
         }
     };
@@ -95,7 +96,11 @@ pub fn normalize_host(raw: &str, allow_ip: bool) -> Result<String, DomainError> 
         }
         return Ok(ip.to_string());
     }
-    if !allow_ip && host.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b':') {
+    if !allow_ip
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b == b'.' || b == b':')
+    {
         return Err(DomainError::IpNotAllowed);
     }
 
@@ -161,37 +166,70 @@ mod tests {
 
     #[test]
     fn normalizes_urls_and_hosts() {
-        assert_eq!(normalize_host("https://Example.COM/path?q=1", false).unwrap(), "example.com");
-        assert_eq!(normalize_host("HTTP://sub.domain.org:8080/x#y", false).unwrap(), "sub.domain.org");
-        assert_eq!(normalize_host("discord.com.", false).unwrap(), "discord.com");
-        assert_eq!(normalize_host("user:pass@host.example:443", false).unwrap(), "host.example");
+        assert_eq!(
+            normalize_host("https://Example.COM/path?q=1", false).unwrap(),
+            "example.com"
+        );
+        assert_eq!(
+            normalize_host("HTTP://sub.domain.org:8080/x#y", false).unwrap(),
+            "sub.domain.org"
+        );
+        assert_eq!(
+            normalize_host("discord.com.", false).unwrap(),
+            "discord.com"
+        );
+        assert_eq!(
+            normalize_host("user:pass@host.example:443", false).unwrap(),
+            "host.example"
+        );
     }
 
     #[test]
     fn normalizes_idna() {
-        assert_eq!(normalize_host("https://пример.рф", false).unwrap(), "xn--e1afmkfd.xn--p1ai");
+        assert_eq!(
+            normalize_host("https://пример.рф", false).unwrap(),
+            "xn--e1afmkfd.xn--p1ai"
+        );
     }
 
     #[test]
     fn handles_ips() {
         assert_eq!(normalize_host("1.2.3.4", true).unwrap(), "1.2.3.4");
-        assert_eq!(normalize_host("[2001:0DB8::0001]:443", true).unwrap(), "2001:db8::1");
-        assert_eq!(normalize_host("1.2.3.4", false), Err(DomainError::IpNotAllowed));
+        assert_eq!(
+            normalize_host("[2001:0DB8::0001]:443", true).unwrap(),
+            "2001:db8::1"
+        );
+        assert_eq!(
+            normalize_host("1.2.3.4", false),
+            Err(DomainError::IpNotAllowed)
+        );
     }
 
     #[test]
     fn rejects_invalid() {
         assert_eq!(normalize_host("", true), Err(DomainError::Empty));
-        assert_eq!(normalize_host("not a domain", false), Err(DomainError::InvalidDomain));
-        assert_eq!(normalize_host("-bad.com", false), Err(DomainError::InvalidDomain));
-        assert_eq!(normalize_host("localhost", false), Err(DomainError::InvalidDomain));
+        assert_eq!(
+            normalize_host("not a domain", false),
+            Err(DomainError::InvalidDomain)
+        );
+        assert_eq!(
+            normalize_host("-bad.com", false),
+            Err(DomainError::InvalidDomain)
+        );
+        assert_eq!(
+            normalize_host("localhost", false),
+            Err(DomainError::InvalidDomain)
+        );
     }
 
     #[test]
     fn list_entries() {
         assert_eq!(normalize_list_entry("10.0.0.0/8").unwrap(), "10.0.0.0/8");
         assert_eq!(normalize_list_entry("192.168.1.5").unwrap(), "192.168.1.5");
-        assert_eq!(normalize_list_entry("HTTPS://Example.com ").unwrap(), "example.com");
+        assert_eq!(
+            normalize_list_entry("HTTPS://Example.com ").unwrap(),
+            "example.com"
+        );
         assert_eq!(normalize_list_entry("# comment").unwrap(), "# comment");
         assert!(normalize_list_entry("999.1.1.1/99").is_err());
     }
@@ -199,8 +237,17 @@ mod tests {
     #[test]
     fn list_entries_urls_with_paths() {
         // Regression: URLs must not be mistaken for CIDR networks.
-        assert_eq!(normalize_list_entry("https://example.com/path?q=1").unwrap(), "example.com");
-        assert_eq!(normalize_list_entry("http://sub.example.org/a/b/").unwrap(), "sub.example.org");
-        assert_eq!(normalize_list_entry("example.com/path").unwrap(), "example.com");
+        assert_eq!(
+            normalize_list_entry("https://example.com/path?q=1").unwrap(),
+            "example.com"
+        );
+        assert_eq!(
+            normalize_list_entry("http://sub.example.org/a/b/").unwrap(),
+            "sub.example.org"
+        );
+        assert_eq!(
+            normalize_list_entry("example.com/path").unwrap(),
+            "example.com"
+        );
     }
 }

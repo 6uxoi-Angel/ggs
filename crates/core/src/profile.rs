@@ -66,7 +66,8 @@ impl ZapretProfile {
             return ProfileHealth::MissingFolder;
         }
         let has_bat = crate::lists::has_strategies(path);
-        let has_winws = path.join("bin").join("winws.exe").is_file() || path.join("winws.exe").is_file();
+        let has_winws =
+            path.join("bin").join("winws.exe").is_file() || path.join("winws.exe").is_file();
         let has_lists = path.join("lists").is_dir();
         match (has_bat, has_winws) {
             (true, true) => ProfileHealth::Ready { lists: has_lists },
@@ -138,10 +139,9 @@ mod tests {
         let back: ZapretProfile = serde_json::from_str(&json).unwrap();
         assert!(back.use_shared_lists);
         // Old configs without the field still parse.
-        let old = serde_json::from_str::<ZapretProfile>(
-            r#"{"id":"ab12cd34","name":"n","path":"/tmp"}"#,
-        )
-        .unwrap();
+        let old =
+            serde_json::from_str::<ZapretProfile>(r#"{"id":"ab12cd34","name":"n","path":"/tmp"}"#)
+                .unwrap();
         assert!(!old.use_shared_lists);
     }
 

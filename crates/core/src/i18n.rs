@@ -411,7 +411,11 @@ static TABLE: &[(&str, &str, &str)] = &[
 ];
 
 pub fn set_language(code: &str) -> &'static str {
-    let normalized = if LANGUAGES.contains(&code) { code } else { "ru" };
+    let normalized = if LANGUAGES.contains(&code) {
+        code
+    } else {
+        "ru"
+    };
     // SAFETY: only &'static str values from LANGUAGES are stored.
     let leaked: &'static str = Box::leak(normalized.to_string().into_boxed_str());
     *CURRENT.write() = leaked;
@@ -432,7 +436,13 @@ pub fn tr_with(key: &str, args: &[(&str, &str)]) -> String {
     let lang = *CURRENT.read();
     let entry = TABLE.iter().find(|(k, _, _)| *k == key);
     let template = match entry {
-        Some((_, ru, en)) => if lang == "en" { *en } else { *ru },
+        Some((_, ru, en)) => {
+            if lang == "en" {
+                *en
+            } else {
+                *ru
+            }
+        }
         None => key,
     };
     let mut out = template.to_string();
@@ -461,7 +471,9 @@ mod tests {
     static LANG_LOCK: Mutex<()> = Mutex::new(());
 
     fn lang_guard() -> std::sync::MutexGuard<'static, ()> {
-        LANG_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        LANG_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     #[test]
@@ -480,7 +492,10 @@ mod tests {
         let _guard = lang_guard();
         set_language("ru");
         assert_eq!(
-            tr_with("zapret.started", &[("strategy", "general.bat"), ("pid", "4242")]),
+            tr_with(
+                "zapret.started",
+                &[("strategy", "general.bat"), ("pid", "4242")]
+            ),
             "Стратегия general.bat запущена (winws PID 4242)"
         );
     }

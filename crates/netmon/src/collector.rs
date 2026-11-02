@@ -12,7 +12,7 @@ pub trait Collector: Send + Sync {
 pub fn default_collector() -> Box<dyn Collector> {
     #[cfg(windows)]
     {
-        Box::new(crate::windows_tables::WindowsCollector::default())
+        Box::new(crate::windows_tables::WindowsCollector)
     }
     #[cfg(target_os = "linux")]
     {

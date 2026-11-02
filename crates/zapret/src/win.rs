@@ -8,14 +8,14 @@ use std::time::{Duration, Instant};
 
 use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, TerminateProcess,
-    PROCESS_QUERY_INFORMATION, PROCESS_TERMINATE,
+    GetCurrentProcess, OpenProcess, OpenProcessToken, TerminateProcess, PROCESS_QUERY_INFORMATION,
+    PROCESS_TERMINATE,
 };
-use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 
 use crate::ZapretError;
 
@@ -41,7 +41,11 @@ pub fn enumerate_processes() -> Vec<WinProcess> {
         };
         if Process32FirstW(snapshot, &mut entry).is_ok() {
             loop {
-                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                let len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
                 out.push(WinProcess {
                     pid: entry.th32ProcessID,
                     parent: entry.th32ParentProcessID,
@@ -134,13 +138,19 @@ pub fn run_hidden(
     command
         .args(args)
         .creation_flags(CREATE_NO_WINDOW_FLAG)
-        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
-    let mut child = command.spawn().map_err(|e| ZapretError::StartFailed(e.to_string()))?;
+    let mut child = command
+        .spawn()
+        .map_err(|e| ZapretError::StartFailed(e.to_string()))?;
 
     if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
         use std::io::Write;
@@ -160,7 +170,9 @@ pub fn run_hidden(
                 if started.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(ZapretError::StartFailed(format!("timeout after {timeout:?}")));
+                    return Err(ZapretError::StartFailed(format!(
+                        "timeout after {timeout:?}"
+                    )));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -179,7 +191,9 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
     reader: Option<R>,
 ) -> std::thread::JoinHandle<String> {
     std::thread::spawn(move || {
-        let Some(mut reader) = reader else { return String::new() };
+        let Some(mut reader) = reader else {
+            return String::new();
+        };
         let mut buf = Vec::new();
         let _ = reader.read_to_end(&mut buf);
         String::from_utf8_lossy(&buf).into_owned()
@@ -188,21 +202,42 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
 
 /// Query the `zapret` Windows service: (installed, running).
 pub fn query_service() -> (bool, bool) {
-    let output = run_hidden("sc", &["query", "zapret"], None, None, Duration::from_secs(4));
-    let Ok(output) = output else { return (false, false) };
+    let output = run_hidden(
+        "sc",
+        &["query", "zapret"],
+        None,
+        None,
+        Duration::from_secs(4),
+    );
+    let Ok(output) = output else {
+        return (false, false);
+    };
     let stdout = output.stdout.to_uppercase();
     let installed = output.code == 0 && stdout.contains("SERVICE_NAME");
-    let running = installed && stdout.contains("STATE") && stdout.contains("4") && stdout.contains("RUNNING");
+    let running =
+        installed && stdout.contains("STATE") && stdout.contains("4") && stdout.contains("RUNNING");
     (installed, running)
 }
 
 /// `sc stop/delete` a service, ignoring "not installed" errors.
 pub fn sc(action: &str, service: &str) {
-    let _ = run_hidden("sc", &[action, service], None, None, Duration::from_secs(20));
+    let _ = run_hidden(
+        "sc",
+        &[action, service],
+        None,
+        None,
+        Duration::from_secs(20),
+    );
 }
 
 pub fn taskkill_image(image: &str) {
-    let _ = run_hidden("taskkill", &["/IM", image, "/F"], None, None, Duration::from_secs(20));
+    let _ = run_hidden(
+        "taskkill",
+        &["/IM", image, "/F"],
+        None,
+        None,
+        Duration::from_secs(20),
+    );
 }
 
 // Keep PWSTR import meaningful for future Win32 string work.
@@ -213,4 +248,5 @@ fn _pwstr_marker(s: &mut [u16]) -> PWSTR {
 
 // PROCESS_QUERY_INFORMATION is used by future per-process path lookups.
 #[allow(dead_code)]
-const _QUERY_INFO: windows::Win32::System::Threading::PROCESS_ACCESS_RIGHTS = PROCESS_QUERY_INFORMATION;
+const _QUERY_INFO: windows::Win32::System::Threading::PROCESS_ACCESS_RIGHTS =
+    PROCESS_QUERY_INFORMATION;

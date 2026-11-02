@@ -28,10 +28,23 @@ pub struct Strategy {
 pub fn discover(zapret_dir: &Path) -> Vec<Strategy> {
     glob_general_bat(zapret_dir)
         .map(|path| {
-            let file = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let file = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let name = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let category = classify(&name);
-            Strategy { file, name, category, path }
+            Strategy {
+                file,
+                name,
+                category,
+                path,
+            }
         })
         .collect()
 }

@@ -69,7 +69,9 @@ impl BridgeStore for BridgeStoreImpl {
             if let Some(manager) = self.managers.lock().get(&profile.id) {
                 let status = manager.status();
                 running = matches!(status, Status::Running | Status::Service);
-                strategy = json!(manager.current_strategy().unwrap_or_else(|| profile.selected_strategy.clone()));
+                strategy = json!(manager
+                    .current_strategy()
+                    .unwrap_or_else(|| profile.selected_strategy.clone()));
             } else {
                 strategy = json!(profile.selected_strategy);
             }
@@ -110,15 +112,24 @@ impl BridgeStore for BridgeStoreImpl {
         .unwrap_or((false, false))
     }
 
-    fn add_domains(&self, profile: Option<&str>, mode: &str, domains: &[String]) -> Result<Value, String> {
+    fn add_domains(
+        &self,
+        profile: Option<&str>,
+        mode: &str,
+        domains: &[String],
+    ) -> Result<Value, String> {
         let list_id = match mode {
             "bypass" => "list-general",
             "exclude" => "list-exclude",
-            other => return Err(integra_core::i18n::tr("bridge.bad_mode").replace("bypass или exclude", other)),
+            other => {
+                return Err(
+                    integra_core::i18n::tr("bridge.bad_mode").replace("bypass или exclude", other)
+                )
+            }
         };
-        let report = self
-            .with_root(profile, |lists| lists.add(list_id, domains).map_err(|e| e.to_string()))
-            .map_err(|e| e)??;
+        let report = self.with_root(profile, |lists| {
+            lists.add(list_id, domains).map_err(|e| e.to_string())
+        })??;
         Ok(json!({
             "mode": mode,
             "changed": report.changed(),
@@ -135,8 +146,7 @@ impl BridgeStore for BridgeStoreImpl {
     fn remove_domain(&self, profile: Option<&str>, domain: &str) -> Result<Vec<String>, String> {
         self.with_root(profile, |lists| {
             lists.remove_from_all(domain).map_err(|e| e.to_string())
-        })
-        .map_err(|e| e)?
+        })?
     }
 
     fn measure_latency(&self, host: &str) -> (bool, Option<u64>, Option<String>) {

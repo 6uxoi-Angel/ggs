@@ -4,7 +4,6 @@
 mod benchmark;
 mod bridge_store;
 mod netcheck;
-mod remote_ctrl;
 mod win;
 
 use std::collections::HashMap;
@@ -21,7 +20,9 @@ use tauri::Manager;
 use integra_bridge::BridgeServer;
 use integra_core::config::AppConfig;
 use integra_core::i18n::tr_with;
-use integra_core::{ConfigStore, ListsManager, LogBuffer, LogEntry, LogLevel, ThemeColors, ThemePreset};
+use integra_core::{
+    ConfigStore, ListsManager, LogBuffer, LogEntry, LogLevel, ThemeColors, ThemePreset,
+};
 use integra_netmon::{Netmon, ProcessFilter, TrackerConfig};
 use integra_zapret::{ManagerEvent, Status, ZapretError, ZapretManager};
 
@@ -38,13 +39,22 @@ pub struct CommandError {
 
 impl CommandError {
     pub fn key(key: &str) -> Self {
-        Self { key: key.into(), message: integra_core::i18n::tr(key) }
+        Self {
+            key: key.into(),
+            message: integra_core::i18n::tr(key),
+        }
     }
     pub fn key_with(key: &str, args: &[(&str, &str)]) -> Self {
-        Self { key: key.into(), message: tr_with(key, args) }
+        Self {
+            key: key.into(),
+            message: tr_with(key, args),
+        }
     }
     pub fn raw(message: impl Into<String>) -> Self {
-        Self { key: "common.error".into(), message: message.into() }
+        Self {
+            key: "common.error".into(),
+            message: message.into(),
+        }
     }
 }
 
@@ -52,17 +62,25 @@ impl From<ZapretError> for CommandError {
     fn from(err: ZapretError) -> Self {
         let key = err.i18n_key();
         let message = match &err {
-            ZapretError::LauncherExited { code, output } => tr_with("zapret.exit_code", &[("code", &code.to_string()), ("suffix", output.as_str())]),
+            ZapretError::LauncherExited { code, output } => tr_with(
+                "zapret.exit_code",
+                &[("code", &code.to_string()), ("suffix", output.as_str())],
+            ),
             ZapretError::Timeout(suffix) => tr_with("zapret.timeout", &[("suffix", suffix)]),
             ZapretError::StartFailed(e) => tr_with("zapret.start_failed", &[("error", e)]),
             ZapretError::StopPartial(e) => tr_with("zapret.stop_partial", &[("errors", e)]),
             ZapretError::InstallFailed(e) => tr_with("zapret.install_failed", &[("error", e)]),
             ZapretError::RemoveFailed(e) => tr_with("zapret.remove_failed", &[("error", e)]),
-            ZapretError::StrategyMissing(name) => tr_with("zapret.strategy_missing", &[("strategy", name)]),
+            ZapretError::StrategyMissing(name) => {
+                tr_with("zapret.strategy_missing", &[("strategy", name)])
+            }
             ZapretError::Maintenance(e) => tr_with("maint.failed", &[("error", e)]),
             other => integra_core::i18n::tr(other.i18n_key()),
         };
-        Self { key: key.into(), message }
+        Self {
+            key: key.into(),
+            message,
+        }
     }
 }
 
@@ -96,7 +114,6 @@ pub struct AppState {
     pub netmon: Arc<Netmon>,
     pub bridge: Arc<BridgeServer>,
     pub benchmark: Mutex<Option<Arc<benchmark::Benchmark>>>,
-    pub remote: Arc<remote_ctrl::RemoteCtrl>,
 }
 
 // parking_lot::Mutex is not `Clone`, so clone every inner value explicitly.
@@ -111,7 +128,6 @@ impl Clone for AppState {
             netmon: self.netmon.clone(),
             bridge: self.bridge.clone(),
             benchmark: Mutex::new(self.benchmark.lock().clone()),
-            remote: self.remote.clone(),
         }
     }
 }
@@ -176,12 +192,19 @@ fn start_dev_log_writer(logs: Arc<LogBuffer>) {
         let _ = std::fs::create_dir_all(parent);
     }
     // Rotate a huge file from the previous session.
-    if std::fs::metadata(&path).map(|m| m.len() > 8 * 1024 * 1024).unwrap_or(false) {
+    if std::fs::metadata(&path)
+        .map(|m| m.len() > 8 * 1024 * 1024)
+        .unwrap_or(false)
+    {
         let _ = std::fs::rename(&path, path.with_extension("prev.log"));
     }
     logs.subscribe(Arc::new(move |entry: &LogEntry| {
         use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
             let _ = writeln!(
                 file,
                 "{} [{:^7}] [{}] {}",
@@ -214,7 +237,10 @@ async fn get_config(state: tauri::State<'_, AppState>) -> Result<AppConfig, Comm
 }
 
 #[tauri::command]
-async fn set_language(state: tauri::State<'_, AppState>, language: String) -> Result<(), CommandError> {
+async fn set_language(
+    state: tauri::State<'_, AppState>,
+    language: String,
+) -> Result<(), CommandError> {
     integra_core::i18n::set_language(&language);
     state
         .config
@@ -229,7 +255,10 @@ async fn set_theme(state: tauri::State<'_, AppState>, theme: String) -> Result<(
     if !integra_core::config::is_valid_theme(&theme) {
         return Err(CommandError::key("theme.preset_applied"));
     }
-    state.config.update(|c| c.theme = theme.clone()).map_err(|e| CommandError::raw(e.to_string()))?;
+    state
+        .config
+        .update(|c| c.theme = theme.clone())
+        .map_err(|e| CommandError::raw(e.to_string()))?;
     state.log_debug("app::settings", format!("theme → {theme}"));
     Ok(())
 }
@@ -255,41 +284,74 @@ struct SettingsPatch {
 }
 
 #[tauri::command]
-async fn update_settings(state: tauri::State<'_, AppState>, patch: SettingsPatch) -> Result<AppConfig, CommandError> {
+async fn update_settings(
+    state: tauri::State<'_, AppState>,
+    patch: SettingsPatch,
+) -> Result<AppConfig, CommandError> {
     let restart_bridge = {
         let mut restart = false;
         state.config.update(|c| {
-            if let Some(v) = patch.start_minimized { c.start_minimized = v; }
-            if let Some(v) = patch.close_to_tray { c.close_to_tray = v; }
-            if let Some(v) = patch.autostart_windows { c.autostart_windows = v; }
-            if let Some(v) = patch.autostart_minimized { c.autostart_minimized = v; }
+            if let Some(v) = patch.start_minimized {
+                c.start_minimized = v;
+            }
+            if let Some(v) = patch.close_to_tray {
+                c.close_to_tray = v;
+            }
+            if let Some(v) = patch.autostart_windows {
+                c.autostart_windows = v;
+            }
+            if let Some(v) = patch.autostart_minimized {
+                c.autostart_minimized = v;
+            }
             if let Some(v) = &patch.log_level {
                 c.log_level = v.clone();
                 state.logs.set_min_level(min_level_from_config(c));
             }
-            if let Some(v) = patch.bridge_enabled { c.bridge.enabled = v; }
+            if let Some(v) = patch.bridge_enabled {
+                c.bridge.enabled = v;
+            }
             if let Some(v) = patch.bridge_port {
                 if v != c.bridge.port {
                     c.bridge.port = v;
                     restart = state.bridge.is_running();
                 }
             }
-            if let Some(v) = patch.netmon_poll_ms { c.netmon.poll_interval_ms = v; }
-            if let Some(v) = patch.netmon_resolve_hosts { c.netmon.resolve_hosts = v; }
-            if let Some(v) = patch.netmon_auto_new { c.netmon.auto_include_new_processes = v; }
-            if let Some(v) = patch.netmon_max_entries { c.netmon.max_entries = v; }
-            if let Some(v) = patch.auto_check_zapret { c.auto_check_zapret = v; }
-            if let Some(v) = patch.auto_install_zapret { c.auto_install_zapret = v; }
-            if let Some(v) = patch.auto_update_zapret { c.auto_update_zapret = v; }
-            if let Some(taskbar) = &patch.taskbar { c.taskbar = taskbar.clone(); }
+            if let Some(v) = patch.netmon_poll_ms {
+                c.netmon.poll_interval_ms = v;
+            }
+            if let Some(v) = patch.netmon_resolve_hosts {
+                c.netmon.resolve_hosts = v;
+            }
+            if let Some(v) = patch.netmon_auto_new {
+                c.netmon.auto_include_new_processes = v;
+            }
+            if let Some(v) = patch.netmon_max_entries {
+                c.netmon.max_entries = v;
+            }
+            if let Some(v) = patch.auto_check_zapret {
+                c.auto_check_zapret = v;
+            }
+            if let Some(v) = patch.auto_install_zapret {
+                c.auto_install_zapret = v;
+            }
+            if let Some(v) = patch.auto_update_zapret {
+                c.auto_update_zapret = v;
+            }
+            if let Some(taskbar) = &patch.taskbar {
+                c.taskbar = taskbar.clone();
+            }
         })?;
         restart
     };
     state.log_debug("app::settings", "settings updated");
     if restart_bridge {
-        let _ = state.bridge.stop();
+        state.bridge.stop();
         let port = state.bridge.start().map_err(CommandError::raw)?;
-        state.log(LogLevel::Info, "bridge", tr_with("bridge.started", &[("port", &port.to_string())]));
+        state.log(
+            LogLevel::Info,
+            "bridge",
+            tr_with("bridge.started", &[("port", &port.to_string())]),
+        );
     }
     Ok(state.config.get())
 }
@@ -301,80 +363,6 @@ async fn netcheck_run() -> Result<netcheck::NetcheckReport, CommandError> {
     tauri::async_runtime::spawn_blocking(netcheck::run)
         .await
         .map_err(|e| CommandError::raw(format!("netcheck: {e}")))
-}
-
-#[derive(Deserialize)]
-#[serde(default)]
-pub struct RemoteSaveReq {
-    pub enabled: bool,
-    pub token: String,
-    pub servers: String,
-    pub autostart: bool,
-}
-
-impl Default for RemoteSaveReq {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            token: String::new(),
-            servers: String::new(),
-            autostart: false,
-        }
-    }
-}
-
-#[tauri::command]
-fn remote_status(state: tauri::State<'_, AppState>) -> Result<Value, CommandError> {
-    let cfg = state.config.get().remote;
-    let blocks = integra_remote::state::State::load(integra_remote::DEFAULT_PROG_DIR).blocks.len();
-    Ok(json!({
-        "running": state.remote.is_running(),
-        "enabled": cfg.enabled,
-        "token_set": !cfg.token.is_empty(),
-        "servers": cfg.servers,
-        "autostart": cfg.autostart,
-        "blocks": blocks,
-    }))
-}
-
-#[tauri::command]
-async fn remote_save(state: tauri::State<'_, AppState>, req: RemoteSaveReq) -> Result<Value, CommandError> {
-    let servers: Vec<String> = req
-        .servers
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    state
-        .config
-        .update(|c| {
-            c.remote.enabled = req.enabled;
-            c.remote.token = req.token.clone();
-            c.remote.servers = servers.clone();
-            c.remote.autostart = req.autostart;
-        })
-        .map_err(|e| CommandError::raw(e.to_string()))?;
-
-    if req.autostart {
-        let exe = std::env::current_exe().map_err(|e| CommandError::raw(e.to_string()))?;
-        match integra_remote::schedule_autostart(&exe.to_string_lossy()) {
-            Ok(m) => state.log(LogLevel::Info, "remote", m),
-            Err(e) => state.log(LogLevel::Warn, "remote", format!("autostart: {e}")),
-        }
-    } else {
-        let _ = integra_remote::remove_autostart();
-    }
-
-    if req.enabled && !req.token.is_empty() && !servers.is_empty() {
-        if !state.remote.start(servers, req.token) {
-            return Err(CommandError::raw("не удалось запустить агент"));
-        }
-    } else if !req.enabled {
-        state.remote.stop();
-    }
-
-    Ok(json!({"ok": true}))
 }
 
 #[tauri::command]
@@ -463,7 +451,9 @@ fn system_check(state: tauri::State<'_, AppState>) -> Result<Vec<ComponentStatus
     out.push(ComponentStatus {
         id: "zapret".into(),
         ok: !profiles.is_empty(),
-        detail: profiles.first().map(|p| p.path.to_string_lossy().into_owned()),
+        detail: profiles
+            .first()
+            .map(|p| p.path.to_string_lossy().into_owned()),
     });
     Ok(out)
 }
@@ -507,8 +497,16 @@ fn profile_view(state: &AppState, profile: integra_core::ZapretProfile) -> Profi
 }
 
 #[tauri::command]
-async fn list_profiles(state: tauri::State<'_, AppState>) -> Result<Vec<ProfileView>, CommandError> {
-    Ok(state.config.get().profiles.into_iter().map(|p| profile_view(&state, p)).collect())
+async fn list_profiles(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ProfileView>, CommandError> {
+    Ok(state
+        .config
+        .get()
+        .profiles
+        .into_iter()
+        .map(|p| profile_view(&state, p))
+        .collect())
 }
 
 #[tauri::command]
@@ -539,7 +537,11 @@ async fn add_profile(
     let Some(profile) = view else {
         return Err(CommandError::key("profile.duplicate_path"));
     };
-    state.log(LogLevel::Success, "app::profiles", format!("profile added: {}", profile.name));
+    state.log(
+        LogLevel::Success,
+        "app::profiles",
+        format!("profile added: {}", profile.name),
+    );
     Ok(profile_view(&state, profile))
 }
 
@@ -556,12 +558,18 @@ async fn update_profile(
         }
     })?;
     let profile = updated.ok_or_else(|| CommandError::key("zapret.path_missing"))?;
-    state.log_debug("app::profiles", format!("profile updated: {}", profile.name));
+    state.log_debug(
+        "app::profiles",
+        format!("profile updated: {}", profile.name),
+    );
     Ok(profile_view(&state, profile))
 }
 
 #[tauri::command]
-async fn remove_profile(state: tauri::State<'_, AppState>, profile_id: String) -> Result<(), CommandError> {
+async fn remove_profile(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<(), CommandError> {
     let mut removed = None;
     state.config.update(|c| {
         if let Some(index) = c.profiles.iter().position(|p| p.id == profile_id) {
@@ -575,14 +583,23 @@ async fn remove_profile(state: tauri::State<'_, AppState>, profile_id: String) -
         let _ = manager.stop();
     }
     let name = removed.map(|p| p.name).unwrap_or_default();
-    state.log(LogLevel::Info, "app::profiles", format!("profile removed: {name}"));
+    state.log(
+        LogLevel::Info,
+        "app::profiles",
+        format!("profile removed: {name}"),
+    );
     Ok(())
 }
 
 #[tauri::command]
-async fn set_active_profile(state: tauri::State<'_, AppState>, profile_id: String) -> Result<(), CommandError> {
+async fn set_active_profile(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<(), CommandError> {
     state.profile(&profile_id)?;
-    state.config.update(|c| c.active_profile = Some(profile_id.clone()))?;
+    state
+        .config
+        .update(|c| c.active_profile = Some(profile_id.clone()))?;
     state.log_debug("app::profiles", format!("active profile → {profile_id}"));
     Ok(())
 }
@@ -618,13 +635,19 @@ async fn start_profile(
 }
 
 #[tauri::command]
-async fn stop_profile(state: tauri::State<'_, AppState>, profile_id: String) -> Result<u32, CommandError> {
+async fn stop_profile(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<u32, CommandError> {
     let manager = state.ensure_manager(&profile_id)?;
-    Ok(manager.stop().map_err(CommandError::from)?)
+    manager.stop().map_err(CommandError::from)
 }
 
 #[tauri::command]
-async fn profile_status(state: tauri::State<'_, AppState>, profile_id: String) -> Result<ProfileView, CommandError> {
+async fn profile_status(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<ProfileView, CommandError> {
     let profile = state.profile(&profile_id)?;
     Ok(profile_view(&state, profile))
 }
@@ -636,11 +659,16 @@ async fn install_service(
     strategy: String,
 ) -> Result<(), CommandError> {
     let manager = state.ensure_manager(&profile_id)?;
-    manager.install_service(&strategy).map_err(CommandError::from)
+    manager
+        .install_service(&strategy)
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
-async fn remove_service(state: tauri::State<'_, AppState>, profile_id: String) -> Result<(), CommandError> {
+async fn remove_service(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<(), CommandError> {
     let manager = state.ensure_manager(&profile_id)?;
     manager.remove_service().map_err(CommandError::from)
 }
@@ -662,8 +690,8 @@ fn with_list_root<T>(
     profile_id: &str,
     f: impl FnOnce(&ListsManager) -> T,
 ) -> CmdResult<T> {
-    let root = bridge_store::lists_root_for(&state.config.get(), profile_id)
-        .map_err(CommandError::raw)?;
+    let root =
+        bridge_store::lists_root_for(&state.config.get(), profile_id).map_err(CommandError::raw)?;
     let lists = state.lists.lock();
     lists.set_root(root);
     Ok(f(&lists))
@@ -693,7 +721,10 @@ async fn list_read(
 }
 
 #[tauri::command]
-async fn list_meta(state: tauri::State<'_, AppState>, profile_id: String) -> Result<Value, CommandError> {
+async fn list_meta(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<Value, CommandError> {
     let config = state.config.get();
     let profile = config
         .profiles
@@ -720,9 +751,14 @@ async fn list_add(
     entries: Vec<String>,
 ) -> Result<integra_core::lists::BulkReport, CommandError> {
     let report = with_list_root(&state, &profile_id, |lists| {
-        lists.add(&list_id, &entries).map_err(|e| CommandError::raw(e.to_string()))
+        lists
+            .add(&list_id, &entries)
+            .map_err(|e| CommandError::raw(e.to_string()))
     })??;
-    state.log_debug("app::lists", format!("list {list_id}: +{} entries", report.added.len()));
+    state.log_debug(
+        "app::lists",
+        format!("list {list_id}: +{} entries", report.added.len()),
+    );
     Ok(report)
 }
 
@@ -734,7 +770,9 @@ async fn list_remove(
     entry: String,
 ) -> Result<bool, CommandError> {
     with_list_root(&state, &profile_id, |lists| {
-        lists.remove(&list_id, &entry).map_err(|e| CommandError::raw(e.to_string()))
+        lists
+            .remove(&list_id, &entry)
+            .map_err(|e| CommandError::raw(e.to_string()))
     })?
 }
 
@@ -746,7 +784,9 @@ async fn list_replace(
     lines: Vec<String>,
 ) -> Result<integra_core::lists::BulkReport, CommandError> {
     with_list_root(&state, &profile_id, |lists| {
-        lists.replace(&list_id, &lines).map_err(|e| CommandError::raw(e.to_string()))
+        lists
+            .replace(&list_id, &lines)
+            .map_err(|e| CommandError::raw(e.to_string()))
     })?
 }
 
@@ -757,7 +797,9 @@ async fn list_remove_from_all(
     entry: String,
 ) -> Result<Vec<String>, CommandError> {
     with_list_root(&state, &profile_id, |lists| {
-        lists.remove_from_all(&entry).map_err(|e| CommandError::raw(e.to_string()))
+        lists
+            .remove_from_all(&entry)
+            .map_err(|e| CommandError::raw(e.to_string()))
     })?
 }
 
@@ -782,7 +824,10 @@ impl FilterDto {
 }
 
 #[tauri::command]
-async fn netmon_start(state: tauri::State<'_, AppState>, filter: FilterDto) -> Result<(), CommandError> {
+async fn netmon_start(
+    state: tauri::State<'_, AppState>,
+    filter: FilterDto,
+) -> Result<(), CommandError> {
     let config = state.config.get();
     let tracker = TrackerConfig {
         filter: filter.into_filter(),
@@ -791,18 +836,29 @@ async fn netmon_start(state: tauri::State<'_, AppState>, filter: FilterDto) -> R
         max_entries: config.netmon.max_entries.clamp(100, 100_000),
         process_refresh: Duration::from_secs(3),
     };
-    state.netmon.start(tracker).map_err(|e| CommandError::key(e.to_string().as_str()))?;
+    state
+        .netmon
+        .start(tracker)
+        .map_err(|e| CommandError::key(e.to_string().as_str()))?;
     state.log(LogLevel::Success, "netmon", "tracking started");
     Ok(())
 }
 
 #[tauri::command]
-async fn netmon_stop(state: tauri::State<'_, AppState>) -> Result<integra_netmon::SessionSummary, CommandError> {
-    let summary = state.netmon.stop().map_err(|e| CommandError::key(e.to_string().as_str()))?;
+async fn netmon_stop(
+    state: tauri::State<'_, AppState>,
+) -> Result<integra_netmon::SessionSummary, CommandError> {
+    let summary = state
+        .netmon
+        .stop()
+        .map_err(|e| CommandError::key(e.to_string().as_str()))?;
     state.log(
         LogLevel::Info,
         "netmon",
-        tr_with("netmon.session_stopped", &[("count", &summary.entries.to_string())]),
+        tr_with(
+            "netmon.session_stopped",
+            &[("count", &summary.entries.to_string())],
+        ),
     );
     Ok(summary)
 }
@@ -816,7 +872,10 @@ async fn netmon_status(state: tauri::State<'_, AppState>) -> Result<Value, Comma
 }
 
 #[tauri::command]
-async fn netmon_entries(state: tauri::State<'_, AppState>, limit: Option<u32>) -> Result<Vec<integra_netmon::TrackedEntry>, CommandError> {
+async fn netmon_entries(
+    state: tauri::State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<Vec<integra_netmon::TrackedEntry>, CommandError> {
     Ok(state.netmon.entries(limit.unwrap_or(500) as usize))
 }
 
@@ -833,7 +892,9 @@ struct ProcessTraffic {
 }
 
 #[tauri::command]
-async fn netmon_summary(state: tauri::State<'_, AppState>) -> Result<Vec<ProcessTraffic>, CommandError> {
+async fn netmon_summary(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ProcessTraffic>, CommandError> {
     let entries = state.netmon.entries(usize::MAX);
     let now = chrono::Local::now();
     let mut order: Vec<(u32, String)> = Vec::new();
@@ -884,17 +945,26 @@ async fn netmon_summary(state: tauri::State<'_, AppState>) -> Result<Vec<Process
             })
         })
         .collect();
-    out.sort_by(|a, b| b.connections.cmp(&a.connections).then(a.process.cmp(&b.process)));
+    out.sort_by(|a, b| {
+        b.connections
+            .cmp(&a.connections)
+            .then(a.process.cmp(&b.process))
+    });
     Ok(out)
 }
 
 #[tauri::command]
-async fn netmon_processes(state: tauri::State<'_, AppState>) -> Result<Vec<integra_netmon::ProcessInfo>, CommandError> {
+async fn netmon_processes(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<integra_netmon::ProcessInfo>, CommandError> {
     Ok(state.netmon.processes())
 }
 
 #[tauri::command]
-async fn netmon_export_csv(state: tauri::State<'_, AppState>, path: String) -> Result<(), CommandError> {
+async fn netmon_export_csv(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<(), CommandError> {
     let csv = state.netmon.export_csv();
     std::fs::write(&path, csv).map_err(|e| CommandError::raw(e.to_string()))?;
     state.log(LogLevel::Success, "netmon", format!("CSV → {path}"));
@@ -918,7 +988,9 @@ fn all_diag_sites(state: &AppState) -> Vec<integra_diag::Site> {
 }
 
 #[tauri::command]
-async fn diag_sites(state: tauri::State<'_, AppState>) -> Result<Vec<integra_diag::Site>, CommandError> {
+async fn diag_sites(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<integra_diag::Site>, CommandError> {
     Ok(all_diag_sites(&state))
 }
 
@@ -935,19 +1007,28 @@ async fn diag_add_site(
     })?;
     let site = integra_core::config::CustomSite {
         id: integra_core::random_hex(4),
-        name: if name.trim().is_empty() { normalized.clone() } else { name.trim().to_string() },
+        name: if name.trim().is_empty() {
+            normalized.clone()
+        } else {
+            name.trim().to_string()
+        },
         host: normalized,
         port: if port == 0 { 443 } else { port },
     };
     state.config.update(|c| {
         c.diagnostics.custom_sites.push(site);
-        c.diagnostics.custom_sites.truncate(integra_core::consts::MAX_CUSTOM_SITES);
+        c.diagnostics
+            .custom_sites
+            .truncate(integra_core::consts::MAX_CUSTOM_SITES);
     })?;
     Ok(all_diag_sites(&state))
 }
 
 #[tauri::command]
-async fn diag_remove_site(state: tauri::State<'_, AppState>, site_id: String) -> Result<Vec<integra_diag::Site>, CommandError> {
+async fn diag_remove_site(
+    state: tauri::State<'_, AppState>,
+    site_id: String,
+) -> Result<Vec<integra_diag::Site>, CommandError> {
     state.config.update(|c| {
         c.diagnostics.custom_sites.retain(|s| s.id != site_id);
     })?;
@@ -983,7 +1064,14 @@ async fn diag_run(
     }
     let rounds = rounds.clamp(1, 10);
     let timeout = Duration::from_millis(timeout_ms.clamp(500, 15_000));
-    state.log_debug("diag", format!("running checks: {} sites, {} kinds", sites.len(), kinds.len()));
+    state.log_debug(
+        "diag",
+        format!(
+            "running checks: {} sites, {} kinds",
+            sites.len(),
+            kinds.len()
+        ),
+    );
     let reports: Vec<SiteReport> = sites
         .iter()
         .map(|site| SiteReport {
@@ -1036,7 +1124,10 @@ async fn benchmark_start(
         logs.log(
             LogLevel::Debug,
             "benchmark",
-            format!("{:?} {} ({}/{})", progress.phase, progress.strategy, progress.index, progress.total),
+            format!(
+                "{:?} {} ({}/{})",
+                progress.phase, progress.strategy, progress.index, progress.total
+            ),
         );
     });
     *state.benchmark.lock() = Some(handle);
@@ -1165,24 +1256,34 @@ async fn dev_disable(state: tauri::State<'_, AppState>) -> Result<(), CommandErr
 }
 
 #[tauri::command]
-async fn open_dev_logs(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), CommandError> {
+async fn open_dev_logs(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), CommandError> {
     let path = dev_log_path();
     if !path.exists() {
-        std::fs::create_dir_all(path.parent().unwrap_or(Path::new("."))).map_err(|e| CommandError::raw(e.to_string()))?;
+        std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))
+            .map_err(|e| CommandError::raw(e.to_string()))?;
         std::fs::write(&path, "").map_err(|e| CommandError::raw(e.to_string()))?;
     }
     win::open_console_tail(&path).map_err(CommandError::raw)?;
     if let Some(window) = app.get_webview_window("main") {
         window.open_devtools();
     }
-    state.log(LogLevel::Info, "app::dev", format!("dev console attached to {}", path.display()));
+    state.log(
+        LogLevel::Info,
+        "app::dev",
+        format!("dev console attached to {}", path.display()),
+    );
     Ok(())
 }
 
 // ── themes ─────────────────────────────────────────────────────────
 
 #[tauri::command]
-async fn theme_presets(state: tauri::State<'_, AppState>) -> Result<Vec<ThemePreset>, CommandError> {
+async fn theme_presets(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ThemePreset>, CommandError> {
     Ok(state.config.get().theme_presets)
 }
 
@@ -1215,12 +1316,19 @@ async fn theme_save_preset(
         c.theme_presets.push(preset.clone());
         c.theme = format!("preset:{}", preset.id);
     })?;
-    state.log(LogLevel::Success, "app::theme", format!("preset saved: {}", preset.name));
+    state.log(
+        LogLevel::Success,
+        "app::theme",
+        format!("preset saved: {}", preset.name),
+    );
     Ok(preset)
 }
 
 #[tauri::command]
-async fn theme_delete_preset(state: tauri::State<'_, AppState>, preset_id: String) -> Result<(), CommandError> {
+async fn theme_delete_preset(
+    state: tauri::State<'_, AppState>,
+    preset_id: String,
+) -> Result<(), CommandError> {
     let mut reset_theme = false;
     state.config.update(|c| {
         c.theme_presets.retain(|p| p.id != preset_id);
@@ -1253,13 +1361,19 @@ async fn read_image_data_url(path: String) -> Result<String, CommandError> {
         Some("bmp") => "image/bmp",
         _ => "application/octet-stream",
     };
-    Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
 }
 
 /// Persist a cropped/optimized background image (data URL) into the app data
 /// dir and return the stored path (used as a preset background reference).
 #[tauri::command]
-async fn save_background_image(app: tauri::AppHandle, data_url: String) -> Result<String, CommandError> {
+async fn save_background_image(
+    app: tauri::AppHandle,
+    data_url: String,
+) -> Result<String, CommandError> {
     let (_, b64) = data_url
         .split_once(',')
         .ok_or_else(|| CommandError::raw("bad data url"))?;
@@ -1294,7 +1408,9 @@ async fn zapret_installed_version(
     profile_id: String,
 ) -> Result<Option<String>, CommandError> {
     let profile = state.profile(&profile_id)?;
-    Ok(integra_zapret::maintenance::installed_version(&profile.path))
+    Ok(integra_zapret::maintenance::installed_version(
+        &profile.path,
+    ))
 }
 
 #[tauri::command]
@@ -1316,13 +1432,22 @@ async fn zapret_install_update(
         let emit = |payload: Value| {
             let _ = tauri::Emitter::emit(&app, "zapret-update", payload);
         };
-        let temp_dir = std::env::temp_dir().join(format!("integra-zapret-{}", integra_core::random_hex(4)));
+        let temp_dir =
+            std::env::temp_dir().join(format!("integra-zapret-{}", integra_core::random_hex(4)));
         let zip_path = temp_dir.join(format!("zapret-{version}.zip"));
         let result = (|| -> Result<(), CommandError> {
-            logs.log(LogLevel::Info, "maint", tr_with("maint.downloading", &[("percent", "0")]));
+            logs.log(
+                LogLevel::Info,
+                "maint",
+                tr_with("maint.downloading", &[("percent", "0")]),
+            );
             let last = std::cell::Cell::new(u64::MAX);
             maint::download(&url, &zip_path, &|copied, total| {
-                let percent = if total > 0 { (copied * 100 / total).min(100) } else { 0 };
+                let percent = copied
+                    .checked_mul(100)
+                    .and_then(|v| v.checked_div(total))
+                    .map(|v| v.min(100))
+                    .unwrap_or(0);
                 // Throttle event spam: report only when the percent changes.
                 if percent != last.get() {
                     last.set(percent);
@@ -1331,15 +1456,24 @@ async fn zapret_install_update(
             })
             .map_err(CommandError::from)?;
             emit(json!({"phase": "extract"}));
-            logs.log(LogLevel::Info, "maint", integra_core::i18n::tr("maint.extracting"));
-            maint::install_release(&zip_path, &profile.path, &version).map_err(CommandError::from)?;
+            logs.log(
+                LogLevel::Info,
+                "maint",
+                integra_core::i18n::tr("maint.extracting"),
+            );
+            maint::install_release(&zip_path, &profile.path, &version)
+                .map_err(CommandError::from)?;
             Ok(())
         })();
         let _ = std::fs::remove_dir_all(&temp_dir);
         match result {
             Ok(()) => {
                 emit(json!({"phase": "done", "version": version}));
-                logs.log(LogLevel::Success, "maint", tr_with("maint.updated", &[("version", &version)]));
+                logs.log(
+                    LogLevel::Success,
+                    "maint",
+                    tr_with("maint.updated", &[("version", &version)]),
+                );
             }
             Err(err) => {
                 emit(json!({"phase": "error", "message": err.message}));
@@ -1361,7 +1495,7 @@ fn show_main_window(app: &tauri::AppHandle) {
 }
 
 fn stop_all_profiles(state: &AppState) {
-    for (_, manager) in state.managers.lock().iter() {
+    for manager in state.managers.lock().values() {
         let _ = manager.stop();
     }
 }
@@ -1384,9 +1518,19 @@ fn autostart_profiles(state: Arc<AppState>) {
                     Ok(pid) => state.log(
                         LogLevel::Success,
                         "zapret::autostart",
-                        tr_with("zapret.started", &[("strategy", &profile.selected_strategy), ("pid", &pid.to_string())]),
+                        tr_with(
+                            "zapret.started",
+                            &[
+                                ("strategy", &profile.selected_strategy),
+                                ("pid", &pid.to_string()),
+                            ],
+                        ),
                     ),
-                    Err(err) => state.log(LogLevel::Error, "zapret::autostart", CommandError::from(err).message),
+                    Err(err) => state.log(
+                        LogLevel::Error,
+                        "zapret::autostart",
+                        CommandError::from(err).message,
+                    ),
                 }
             }
         })
@@ -1399,7 +1543,11 @@ pub fn run() {
     let logs = LogBuffer::new(5000);
     logs.set_min_level(min_level_from_config(&config.get()));
     start_dev_log_writer(logs.clone());
-    logs.log(LogLevel::Info, "app", format!("Integra {APP_VERSION} starting"));
+    logs.log(
+        LogLevel::Info,
+        "app",
+        format!("Integra {APP_VERSION} starting"),
+    );
 
     let (managers_tx, managers_rx) = mpsc::channel::<ManagerEvent>();
     let lists = Arc::new(Mutex::new(ListsManager::new(".")));
@@ -1422,21 +1570,16 @@ pub fn run() {
         netmon: Netmon::new(),
         bridge,
         benchmark: Mutex::new(None),
-        remote: Arc::new(remote_ctrl::RemoteCtrl::new()),
     });
 
     if config.get().bridge.enabled {
         match state.bridge.start() {
-            Ok(port) => logs.log(LogLevel::Success, "bridge", tr_with("bridge.log_started", &[("port", &port.to_string())])),
+            Ok(port) => logs.log(
+                LogLevel::Success,
+                "bridge",
+                tr_with("bridge.log_started", &[("port", &port.to_string())]),
+            ),
             Err(err) => logs.log(LogLevel::Warn, "bridge", err),
-        }
-    }
-
-    // Auto-start the remote agent if configured (GUI mode).
-    {
-        let rc = config.get().remote;
-        if rc.enabled && !rc.token.is_empty() && !rc.servers.is_empty() {
-            state.remote.start(rc.servers, rc.token);
         }
     }
 
@@ -1461,14 +1604,25 @@ pub fn run() {
                         use tauri::Emitter;
                         for event in managers_rx {
                             match event {
-                                ManagerEvent::Status { profile, status, pid } => {
-                                    let _ = handle.emit("profile-event", json!({"profile": profile, "status": status, "pid": pid}));
+                                ManagerEvent::Status {
+                                    profile,
+                                    status,
+                                    pid,
+                                } => {
+                                    let _ = handle.emit(
+                                        "profile-event",
+                                        json!({"profile": profile, "status": status, "pid": pid}),
+                                    );
                                 }
                                 ManagerEvent::Log { level, message } => {
                                     logs.log(LogLevel::parse(&level), "zapret", message);
                                 }
                                 ManagerEvent::Error { profile, message } => {
-                                    logs.log(LogLevel::Error, "zapret", format!("[{profile}] {message}"));
+                                    logs.log(
+                                        LogLevel::Error,
+                                        "zapret",
+                                        format!("[{profile}] {message}"),
+                                    );
                                 }
                             }
                         }
@@ -1505,7 +1659,12 @@ pub fn run() {
                         _ => {}
                     })
                     .on_tray_icon_event(|tray, event| {
-                        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
                             show_main_window(tray.app_handle());
                         }
                     });
@@ -1552,12 +1711,12 @@ pub fn run() {
                     .name("integra-update-check".into())
                     .spawn(move || {
                         std::thread::sleep(std::time::Duration::from_millis(2500));
-                        match integra_zapret::maintenance::fetch_latest() {
-                            Ok(release) => {
-                                use tauri::Emitter;
-                                let _ = handle.emit("zapret-update", json!({"phase": "check", "release": release}));
-                            }
-                            Err(_) => {}
+                        if let Ok(release) = integra_zapret::maintenance::fetch_latest() {
+                            use tauri::Emitter;
+                            let _ = handle.emit(
+                                "zapret-update",
+                                json!({"phase": "check", "release": release}),
+                            );
                         }
                     })
                     .ok();
@@ -1625,8 +1784,6 @@ pub fn run() {
             bridge_stop,
             bridge_pairing,
             bridge_regenerate_code,
-            remote_status,
-            remote_save,
             netcheck_run,
             logs_snapshot,
             logs_clear,
@@ -1646,27 +1803,4 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, _event| {});
-}
-
-/// Headless agent mode: no window, used by the "IntegraRemote" scheduled
-/// task (auto-start from the settings page). Returns a process exit code.
-pub fn remote_run_standalone() -> i32 {
-    let cfg = ConfigStore::load(None).get().remote;
-    if cfg.token.is_empty() || cfg.servers.is_empty() {
-        return 2;
-    }
-    // Single-instance guard: never run two agents at once.
-    if std::net::TcpListener::bind(("127.0.0.1", 31732)).is_err() {
-        return 0;
-    }
-    let _ = std::fs::create_dir_all(integra_remote::DEFAULT_PROG_DIR);
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    integra_remote::run_agent(integra_remote::AgentCfg {
-        servers: cfg.servers,
-        token: cfg.token,
-        prog_dir: integra_remote::DEFAULT_PROG_DIR.into(),
-        foreground_log: false,
-        stop,
-    });
-    0
 }

@@ -10,7 +10,8 @@ pub struct Version(pub Vec<u64>);
 impl Version {
     /// Extract the first version-looking substring: `v1.6.2`, `1.6`, `2.0.1-beta`.
     pub fn parse(text: &str) -> Option<Version> {
-        let re = Regex::new(r"(?i)\b(?:v(?:ersion)?\s*)?(\d+(?:\.\d+)+)(?:[-+][A-Za-z0-9.-]+)?\b").ok()?;
+        let re = Regex::new(r"(?i)\b(?:v(?:ersion)?\s*)?(\d+(?:\.\d+)+)(?:[-+][A-Za-z0-9.-]+)?\b")
+            .ok()?;
         let caps = re.captures(text)?;
         let parts = caps[1]
             .split('.')
@@ -53,7 +54,10 @@ mod tests {
     fn parses_variants() {
         assert_eq!(Version::parse("v1.6.2").unwrap().to_string(), "1.6.2");
         assert_eq!(Version::parse("version 2.0").unwrap().to_string(), "2.0");
-        assert_eq!(Version::parse("zapret-1.6.2-rc1").unwrap().to_string(), "1.6.2");
+        assert_eq!(
+            Version::parse("zapret-1.6.2-rc1").unwrap().to_string(),
+            "1.6.2"
+        );
         assert!(Version::parse("no digits").is_none());
     }
 

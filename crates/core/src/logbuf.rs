@@ -89,7 +89,12 @@ impl LogBuffer {
         if level.weight() < self.min_level.lock().weight() {
             return;
         }
-        let entry = LogEntry { ts: Local::now(), level, source: source.into(), message: message.into() };
+        let entry = LogEntry {
+            ts: Local::now(),
+            level,
+            source: source.into(),
+            message: message.into(),
+        };
         {
             let mut entries = self.entries.lock();
             if entries.len() >= self.capacity {

@@ -79,7 +79,9 @@ pub fn build_hidden_runtime_batch(source: &Path, destination: &Path) -> Result<(
             continue;
         }
 
-        let matched = start_quoted.captures(body).or_else(|| start_bare.captures(body));
+        let matched = start_quoted
+            .captures(body)
+            .or_else(|| start_bare.captures(body));
         if !replaced {
             if let Some(caps) = matched {
                 if body.to_lowercase().contains("winws.exe") {
@@ -122,9 +124,15 @@ mod tests {
         build_hidden_runtime_batch(&source, &dest).unwrap();
         let text = fs::read_to_string(&dest).unwrap();
 
-        assert!(text.contains("@set \"NO_UPDATE_CHECK=1\""), "env must be injected");
+        assert!(
+            text.contains("@set \"NO_UPDATE_CHECK=1\""),
+            "env must be injected"
+        );
         assert!(!text.contains("start "), "start must be removed");
-        assert!(text.contains("\"%~dp0bin\\winws.exe\" %ARGS%"), "direct invocation preserved");
+        assert!(
+            text.contains("\"%~dp0bin\\winws.exe\" %ARGS%"),
+            "direct invocation preserved"
+        );
         assert!(text.contains("\r\n"), "CRLF endings preserved");
     }
 
@@ -133,7 +141,11 @@ mod tests {
         let dir = integra_core::lists::tempfile_lite::TempDir::new("integra-bat2");
         let source = dir.path().join("general.bat");
         let dest = dir.path().join("out.bat");
-        fs::write(&source, "@echo off\nstart /min bin\\winws.exe --filter=tcp\necho done\n").unwrap();
+        fs::write(
+            &source,
+            "@echo off\nstart /min bin\\winws.exe --filter=tcp\necho done\n",
+        )
+        .unwrap();
         build_hidden_runtime_batch(&source, &dest).unwrap();
         let text = fs::read_to_string(&dest).unwrap();
         assert!(text.contains("bin\\winws.exe --filter=tcp"));

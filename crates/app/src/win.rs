@@ -63,7 +63,13 @@ pub fn open_console_tail(path: &std::path::Path) -> Result<(), String> {
     #[cfg(windows)]
     {
         Command::new("powershell")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &script,
+            ])
             .creation_flags(CREATE_NEW_CONSOLE)
             .stdin(Stdio::null())
             .spawn()

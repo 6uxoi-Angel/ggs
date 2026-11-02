@@ -30,21 +30,35 @@ impl Collector for ProcFsCollector {
 
     fn processes(&self) -> Vec<ProcessInfo> {
         let mut out = Vec::new();
-        let Ok(entries) = fs::read_dir("/proc") else { return out };
+        let Ok(entries) = fs::read_dir("/proc") else {
+            return out;
+        };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if let Ok(pid) = name.parse::<u32>() {
                 let comm = fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
-                let exe = fs::read_link(format!("/proc/{pid}/exe")).ok().map(|p| p.to_string_lossy().to_string());
-                out.push(ProcessInfo { pid, name: comm.trim().to_string(), exe });
+                let exe = fs::read_link(format!("/proc/{pid}/exe"))
+                    .ok()
+                    .map(|p| p.to_string_lossy().to_string());
+                out.push(ProcessInfo {
+                    pid,
+                    name: comm.trim().to_string(),
+                    exe,
+                });
             }
         }
         out
     }
 }
 
-fn parse_net_file(path: &Path, proto: Protocol, inode_to_pid: &HashMap<u64, u32>) -> Vec<Connection> {
-    let Ok(text) = fs::read_to_string(path) else { return Vec::new() };
+fn parse_net_file(
+    path: &Path,
+    proto: Protocol,
+    inode_to_pid: &HashMap<u64, u32>,
+) -> Vec<Connection> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
     let is_tcp = matches!(proto, Protocol::Tcp4 | Protocol::Tcp6);
     let is_v6 = matches!(proto, Protocol::Tcp6 | Protocol::Udp6);
     text.lines()
@@ -56,11 +70,25 @@ fn parse_net_file(path: &Path, proto: Protocol, inode_to_pid: &HashMap<u64, u32>
             }
             let local = parse_addr(f[1], is_v6)?;
             let remote = parse_addr(f[2], is_v6)?;
-            let state = if is_tcp { TcpState::from_raw(u32::from_str_radix(f[3], 16).ok()?) } else { None };
+            let state = if is_tcp {
+                TcpState::from_raw(u32::from_str_radix(f[3], 16).ok()?)
+            } else {
+                None
+            };
             let inode = f[9].parse::<u64>().ok()?;
             let pid = inode_to_pid.get(&inode).copied().unwrap_or(0);
-            let remote_opt = if remote.ip().is_unspecified() && remote.port() == 0 { None } else { Some(remote) };
-            Some(Connection { proto, local, remote: remote_opt, state, pid })
+            let remote_opt = if remote.ip().is_unspecified() && remote.port() == 0 {
+                None
+            } else {
+                Some(remote)
+            };
+            Some(Connection {
+                proto,
+                local,
+                remote: remote_opt,
+                state,
+                pid,
+            })
         })
         .collect()
 }
@@ -88,12 +116,18 @@ fn parse_addr(text: &str, v6: bool) -> Option<SocketAddr> {
 
 fn inode_pid_map() -> HashMap<u64, u32> {
     let mut map = HashMap::new();
-    let Ok(entries) = fs::read_dir("/proc") else { return map };
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return map;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let Ok(pid) = name.parse::<u32>() else { continue };
+        let Ok(pid) = name.parse::<u32>() else {
+            continue;
+        };
         let fd_dir = format!("/proc/{pid}/fd");
-        let Ok(fds) = fs::read_dir(&fd_dir) else { continue };
+        let Ok(fds) = fs::read_dir(&fd_dir) else {
+            continue;
+        };
         for fd in fds.flatten() {
             if let Ok(link) = fs::read_link(fd.path()) {
                 let link = link.to_string_lossy();

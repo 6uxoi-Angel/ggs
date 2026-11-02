@@ -95,7 +95,12 @@ fn check_sites(hosts: &[(String, String, u16)]) -> (usize, usize, u64) {
     let mut total = 0usize;
     let mut latency_sum = 0u64;
     for (_, host, port) in hosts {
-        let site = integra_diag::Site { id: String::new(), name: String::new(), host: host.clone(), port: *port };
+        let site = integra_diag::Site {
+            id: String::new(),
+            name: String::new(),
+            host: host.clone(),
+            port: *port,
+        };
         let outcomes = integra_diag::check_site(
             &site,
             &[CheckKind::Tcp, CheckKind::Tls, CheckKind::Http],
@@ -179,11 +184,10 @@ pub fn spawn(
 
                 notify(BenchPhase::Checking);
                 let (passed, total_checks, latency_sum) = check_sites(&sites);
-                let success_ratio = if total_checks == 0 {
-                    0
-                } else {
-                    (passed * 100 / total_checks) as u32
-                };
+                let success_ratio = passed
+                    .checked_mul(100)
+                    .and_then(|v| v.checked_div(total_checks))
+                    .unwrap_or(0) as u32;
                 let latency_score: u32 = if passed == 0 {
                     0
                 } else {
@@ -193,7 +197,8 @@ pub fn spawn(
                     let penalty = (over * 100 / 5960).min(100);
                     (100 - penalty) as u32
                 };
-                let score = (success_ratio as u64 * 80 / 100 + latency_score as u64 * 20 / 100) as u32;
+                let score =
+                    (success_ratio as u64 * 80 / 100 + latency_score as u64 * 20 / 100) as u32;
                 entries.push(BenchEntry {
                     strategy: strategy.clone(),
                     score,
@@ -225,7 +230,11 @@ pub fn spawn(
 
             {
                 let mut progress = bench_ref.progress.write();
-                progress.phase = if cancelled { BenchPhase::Cancelled } else { BenchPhase::Done };
+                progress.phase = if cancelled {
+                    BenchPhase::Cancelled
+                } else {
+                    BenchPhase::Done
+                };
             }
             *bench_ref.result.lock() = Some(BenchResult {
                 entries,

@@ -94,7 +94,9 @@ impl Netmon {
 
     fn collector(&self) -> Arc<Box<dyn Collector>> {
         let mut guard = self.collector.lock();
-        guard.get_or_insert_with(|| Arc::new(default_collector())).clone()
+        guard
+            .get_or_insert_with(|| Arc::new(default_collector()))
+            .clone()
     }
 
     pub fn set_on_entry(&self, callback: OnEntry) {
@@ -102,7 +104,10 @@ impl Netmon {
     }
 
     pub fn is_running(&self) -> bool {
-        self.session.lock().as_ref().is_some_and(|s| !s.stop.load(Ordering::Relaxed))
+        self.session
+            .lock()
+            .as_ref()
+            .is_some_and(|s| !s.stop.load(Ordering::Relaxed))
     }
 
     pub fn last_summary(&self) -> Option<SessionSummary> {
@@ -111,7 +116,10 @@ impl Netmon {
 
     pub fn start(&self, config: TrackerConfig) -> Result<(), NetmonError> {
         let mut guard = self.session.lock();
-        if guard.as_ref().is_some_and(|s| !s.stop.load(Ordering::Relaxed)) {
+        if guard
+            .as_ref()
+            .is_some_and(|s| !s.stop.load(Ordering::Relaxed))
+        {
             return Err(NetmonError::AlreadyRunning);
         }
 
@@ -128,7 +136,12 @@ impl Netmon {
             .map_err(|_| NetmonError::NotRunning)?;
 
         *self.finished.lock() = None;
-        *guard = Some(Session { stop, handle, entries, started: Instant::now() });
+        *guard = Some(Session {
+            stop,
+            handle,
+            entries,
+            started: Instant::now(),
+        });
         Ok(())
     }
 
@@ -139,11 +152,18 @@ impl Netmon {
         let store = session.entries.lock();
         let summary = SessionSummary {
             entries: store.len(),
-            processes_seen: store.iter().map(|(_, e)| e.pid).collect::<HashSet<_>>().len(),
+            processes_seen: store
+                .iter()
+                .map(|(_, e)| e.pid)
+                .collect::<HashSet<_>>()
+                .len(),
             duration_secs: session.started.elapsed().as_secs(),
         };
         drop(store);
-        *self.finished.lock() = Some(Finished { entries: session.entries, summary: summary.clone() });
+        *self.finished.lock() = Some(Finished {
+            entries: session.entries,
+            summary: summary.clone(),
+        });
         Ok(summary)
     }
 
@@ -155,7 +175,9 @@ impl Netmon {
     }
 
     pub fn entries(&self, limit: usize) -> Vec<TrackedEntry> {
-        let Some(store) = self.store() else { return Vec::new() };
+        let Some(store) = self.store() else {
+            return Vec::new();
+        };
         let store = store.lock();
         let start = store.len().saturating_sub(limit.max(1));
         store[start..].iter().map(|(_, e)| e.clone()).collect()
@@ -163,7 +185,9 @@ impl Netmon {
 
     /// Export the current/last session as CSV.
     pub fn export_csv(&self) -> String {
-        let mut out = String::from("first_seen,last_seen,hits,process,pid,protocol,local,remote,host,service\n");
+        let mut out = String::from(
+            "first_seen,last_seen,hits,process,pid,protocol,local,remote,host,service\n",
+        );
         for e in self.entries(usize::MAX) {
             out.push_str(&format!(
                 "{},{},{},\"{}\",{},{:?},{},{},{},{}\n",
@@ -185,7 +209,7 @@ impl Netmon {
     /// Current process list for the UI picker.
     pub fn processes(&self) -> Vec<ProcessInfo> {
         let mut procs = self.collector().processes();
-        procs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        procs.sort_by_key(|a| a.name.to_lowercase());
         procs.dedup_by(|a, b| a.pid == b.pid);
         procs
     }
@@ -239,7 +263,9 @@ fn run_session(
                         .iter()
                         .filter(|(_, p)| {
                             p.name.to_lowercase().contains(&pattern)
-                                || p.exe.as_ref().is_some_and(|e| e.to_lowercase().contains(&pattern))
+                                || p.exe
+                                    .as_ref()
+                                    .is_some_and(|e| e.to_lowercase().contains(&pattern))
                         })
                         .map(|(pid, _)| *pid)
                         .collect()
@@ -269,7 +295,9 @@ fn run_session(
                 let entry = TrackedEntry {
                     proto: conn.proto,
                     pid: conn.pid,
-                    process: proc.map(|p| p.name.clone()).unwrap_or_else(|| format!("pid {}", conn.pid)),
+                    process: proc
+                        .map(|p| p.name.clone())
+                        .unwrap_or_else(|| format!("pid {}", conn.pid)),
                     exe: proc.and_then(|p| p.exe.clone()),
                     local: conn.local.to_string(),
                     remote: conn.remote.map(|r| r.to_string()),
@@ -339,7 +367,9 @@ fn resolver_loop(
     stop: Arc<AtomicBool>,
 ) {
     while !stop.load(Ordering::Relaxed) {
-        let Ok(ip) = rx.recv_timeout(Duration::from_millis(250)) else { continue };
+        let Ok(ip) = rx.recv_timeout(Duration::from_millis(250)) else {
+            continue;
+        };
         if let Some(cached) = cache.lock().get(&ip).cloned() {
             if let Some(host) = cached {
                 apply_host(&entries, &ip, &host);
@@ -396,9 +426,17 @@ mod tests {
         }
 
         fn processes(&self) -> Vec<ProcessInfo> {
-            let mut procs = vec![ProcessInfo { pid: 1000, name: "discord.exe".into(), exe: None }];
+            let mut procs = vec![ProcessInfo {
+                pid: 1000,
+                name: "discord.exe".into(),
+                exe: None,
+            }];
             if self.polls.load(Ordering::SeqCst) >= self.apex_after {
-                procs.push(ProcessInfo { pid: 2000, name: "r5apex.exe".into(), exe: None });
+                procs.push(ProcessInfo {
+                    pid: 2000,
+                    name: "r5apex.exe".into(),
+                    exe: None,
+                });
             }
             procs
         }
@@ -420,8 +458,13 @@ mod tests {
             polls: AtomicUsize::new(0),
             apex_after: 0,
         }));
-        netmon.start(config(ProcessFilter::Name("apex".into()))).unwrap();
-        assert!(netmon.start(TrackerConfig::default()).is_err(), "double start rejected");
+        netmon
+            .start(config(ProcessFilter::Name("apex".into())))
+            .unwrap();
+        assert!(
+            netmon.start(TrackerConfig::default()).is_err(),
+            "double start rejected"
+        );
         std::thread::sleep(Duration::from_millis(250));
         let entries = netmon.entries(100);
         assert_eq!(entries.len(), 1);
@@ -443,7 +486,9 @@ mod tests {
             polls: AtomicUsize::new(0),
             apex_after: 3, // appears after the session already runs
         }));
-        netmon.start(config(ProcessFilter::Name("apex".into()))).unwrap();
+        netmon
+            .start(config(ProcessFilter::Name("apex".into())))
+            .unwrap();
         std::thread::sleep(Duration::from_millis(500));
         let entries = netmon.entries(100);
         assert_eq!(entries.len(), 1, "apex launched later is still captured");

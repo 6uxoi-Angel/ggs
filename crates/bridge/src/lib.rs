@@ -33,7 +33,12 @@ pub trait BridgeStore: Send + Sync {
     fn profiles(&self) -> Value;
     fn counts(&self, profile: Option<&str>) -> Value;
     fn contains(&self, profile: Option<&str>, domain: &str) -> (bool, bool);
-    fn add_domains(&self, profile: Option<&str>, mode: &str, domains: &[String]) -> Result<Value, String>;
+    fn add_domains(
+        &self,
+        profile: Option<&str>,
+        mode: &str,
+        domains: &[String],
+    ) -> Result<Value, String>;
     fn remove_domain(&self, profile: Option<&str>, domain: &str) -> Result<Vec<String>, String>;
     fn measure_latency(&self, host: &str) -> (bool, Option<u64>, Option<String>);
     fn log(&self, level: &str, message: &str);
@@ -69,7 +74,10 @@ impl BridgeServer {
     }
 
     pub fn is_running(&self) -> bool {
-        self.running.lock().as_ref().is_some_and(|r| !r.shutdown.load(Ordering::Relaxed))
+        self.running
+            .lock()
+            .as_ref()
+            .is_some_and(|r| !r.shutdown.load(Ordering::Relaxed))
     }
 
     pub fn actual_port(&self) -> u16 {
@@ -104,16 +112,24 @@ impl BridgeServer {
 
     pub fn start(self: &Arc<Self>) -> Result<u16, String> {
         let mut guard = self.running.lock();
-        if guard.as_ref().is_some_and(|r| !r.shutdown.load(Ordering::Relaxed)) {
+        if guard
+            .as_ref()
+            .is_some_and(|r| !r.shutdown.load(Ordering::Relaxed))
+        {
             return Err(integra_core::i18n::tr_with(
                 "bridge.already_running",
                 &[("port", &self.actual_port().to_string())],
             ));
         }
         let port = self.port.load(Ordering::Relaxed);
-        let server = Server::http(("127.0.0.1", port))
-            .map_err(|e| integra_core::i18n::tr_with("bridge.start_failed", &[("error", &e.to_string())]))?;
-        let actual = server.server_addr().to_ip().map(|a| a.port()).unwrap_or(port);
+        let server = Server::http(("127.0.0.1", port)).map_err(|e| {
+            integra_core::i18n::tr_with("bridge.start_failed", &[("error", &e.to_string())])
+        })?;
+        let actual = server
+            .server_addr()
+            .to_ip()
+            .map(|a| a.port())
+            .unwrap_or(port);
         self.port.store(actual, Ordering::Relaxed);
 
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -135,7 +151,10 @@ impl BridgeServer {
             })
             .map_err(|e| e.to_string())?;
 
-        *guard = Some(Running { shutdown, thread: Some(thread) });
+        *guard = Some(Running {
+            shutdown,
+            thread: Some(thread),
+        });
         let actual = self.actual_port();
         self.store.log(
             "SUCCESS",
@@ -151,7 +170,8 @@ impl BridgeServer {
             if let Some(thread) = running.thread {
                 let _ = thread.join();
             }
-            self.store.log("INFO", &integra_core::i18n::tr("bridge.log_stopped"));
+            self.store
+                .log("INFO", &integra_core::i18n::tr("bridge.log_stopped"));
         }
     }
 
@@ -164,7 +184,12 @@ impl BridgeServer {
         let origin = header_value(&request, "Origin");
 
         if !valid_origin(origin.as_deref()) {
-            return respond(request, origin.as_deref(), 403, json!({"ok": false, "error": integra_core::i18n::tr("bridge.invalid_origin")}));
+            return respond(
+                request,
+                origin.as_deref(),
+                403,
+                json!({"ok": false, "error": integra_core::i18n::tr("bridge.invalid_origin")}),
+            );
         }
 
         if method == Method::Options {
@@ -176,7 +201,12 @@ impl BridgeServer {
         // Single auth gate for every /api/* route.
         let needs_auth = route.starts_with("/api/");
         if needs_auth && !self.token_ok(&request) {
-            return respond(request, origin.as_deref(), 401, json!({"ok": false, "error": integra_core::i18n::tr("bridge.auth_required")}));
+            return respond(
+                request,
+                origin.as_deref(),
+                401,
+                json!({"ok": false, "error": integra_core::i18n::tr("bridge.auth_required")}),
+            );
         }
 
         match (method, route.as_str()) {
@@ -203,16 +233,31 @@ impl BridgeServer {
                 respond(request, origin.as_deref(), 200, data);
             }
             (Method::Get, "/api/profiles") => {
-                respond(request, origin.as_deref(), 200, json!({"ok": true, "profiles": self.store.profiles()}));
+                respond(
+                    request,
+                    origin.as_deref(),
+                    200,
+                    json!({"ok": true, "profiles": self.store.profiles()}),
+                );
             }
             (Method::Get, "/api/ping") => {
                 let host = query_param(&query, "host").unwrap_or_default();
                 match integra_core::normalize_host(&host, false) {
                     Ok(normalized) => {
                         let (ok, latency, error) = self.store.measure_latency(&normalized);
-                        respond(request, origin.as_deref(), 200, json!({"ok": ok, "host": normalized, "latency_ms": latency, "error": error}));
+                        respond(
+                            request,
+                            origin.as_deref(),
+                            200,
+                            json!({"ok": ok, "host": normalized, "latency_ms": latency, "error": error}),
+                        );
                     }
-                    Err(err) => respond(request, origin.as_deref(), 400, json!({"ok": false, "error": err.to_string()})),
+                    Err(err) => respond(
+                        request,
+                        origin.as_deref(),
+                        400,
+                        json!({"ok": false, "error": err.to_string()}),
+                    ),
                 }
             }
             (Method::Get, "/api/domain") => {
@@ -221,9 +266,19 @@ impl BridgeServer {
                 match integra_core::normalize_host(&raw, true) {
                     Ok(domain) => {
                         let (bypass, exclude) = self.store.contains(profile.as_deref(), &domain);
-                        respond(request, origin.as_deref(), 200, json!({"ok": true, "domain": domain, "bypass": bypass, "exclude": exclude}));
+                        respond(
+                            request,
+                            origin.as_deref(),
+                            200,
+                            json!({"ok": true, "domain": domain, "bypass": bypass, "exclude": exclude}),
+                        );
                     }
-                    Err(err) => respond(request, origin.as_deref(), 400, json!({"ok": false, "error": err.to_string()})),
+                    Err(err) => respond(
+                        request,
+                        origin.as_deref(),
+                        400,
+                        json!({"ok": false, "error": err.to_string()}),
+                    ),
                 }
             }
             (Method::Post, "/api/domain") => {
@@ -231,28 +286,66 @@ impl BridgeServer {
                     Ok(payload) => payload,
                     Err((status, err)) => return respond(request, origin.as_deref(), status, err),
                 };
-                let profile = payload.get("profile").and_then(|v| v.as_str()).map(str::to_string);
-                let mode = payload.get("mode").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                let profile = payload
+                    .get("profile")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                let mode = payload
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
                 if !["bypass", "exclude"].contains(&mode.as_str()) {
-                    return respond(request, origin.as_deref(), 400, json!({"ok": false, "error": integra_core::i18n::tr("bridge.bad_mode")}));
+                    return respond(
+                        request,
+                        origin.as_deref(),
+                        400,
+                        json!({"ok": false, "error": integra_core::i18n::tr("bridge.bad_mode")}),
+                    );
                 }
-                let raw = payload.get("domain").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let raw = payload
+                    .get("domain")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 match integra_core::normalize_host(&raw, true) {
-                    Ok(domain) => match self.store.add_domains(profile.as_deref(), &mode, &[domain.clone()]) {
-                        Ok(report) => {
-                            self.store.log("INFO", &integra_core::i18n::tr_with("bridge.domain_log", &[("domain", &domain), ("mode", &mode)]));
-                            let mut out = report;
-                            if let Value::Object(map) = &mut out {
-                                map.insert("ok".into(), json!(true));
-                                map.insert("domain".into(), json!(domain));
-                                map.insert("mode".into(), json!(mode));
-                                map.insert("restart_required".into(), json!(true));
+                    Ok(domain) => {
+                        match self.store.add_domains(
+                            profile.as_deref(),
+                            &mode,
+                            std::slice::from_ref(&domain),
+                        ) {
+                            Ok(report) => {
+                                self.store.log(
+                                    "INFO",
+                                    &integra_core::i18n::tr_with(
+                                        "bridge.domain_log",
+                                        &[("domain", &domain), ("mode", &mode)],
+                                    ),
+                                );
+                                let mut out = report;
+                                if let Value::Object(map) = &mut out {
+                                    map.insert("ok".into(), json!(true));
+                                    map.insert("domain".into(), json!(domain));
+                                    map.insert("mode".into(), json!(mode));
+                                    map.insert("restart_required".into(), json!(true));
+                                }
+                                respond(request, origin.as_deref(), 200, out);
                             }
-                            respond(request, origin.as_deref(), 200, out);
+                            Err(err) => respond(
+                                request,
+                                origin.as_deref(),
+                                400,
+                                json!({"ok": false, "error": err}),
+                            ),
                         }
-                        Err(err) => respond(request, origin.as_deref(), 400, json!({"ok": false, "error": err})),
-                    },
-                    Err(err) => respond(request, origin.as_deref(), 400, json!({"ok": false, "error": err.to_string()})),
+                    }
+                    Err(err) => respond(
+                        request,
+                        origin.as_deref(),
+                        400,
+                        json!({"ok": false, "error": err.to_string()}),
+                    ),
                 }
             }
             // NEW in API v2: bulk add — powers the extension's "capture all URLs" flow.
@@ -261,23 +354,55 @@ impl BridgeServer {
                     Ok(payload) => payload,
                     Err((status, err)) => return respond(request, origin.as_deref(), status, err),
                 };
-                let profile = payload.get("profile").and_then(|v| v.as_str()).map(str::to_string);
-                let mode = payload.get("mode").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                let profile = payload
+                    .get("profile")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                let mode = payload
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
                 if !["bypass", "exclude"].contains(&mode.as_str()) {
-                    return respond(request, origin.as_deref(), 400, json!({"ok": false, "error": integra_core::i18n::tr("bridge.bad_mode")}));
+                    return respond(
+                        request,
+                        origin.as_deref(),
+                        400,
+                        json!({"ok": false, "error": integra_core::i18n::tr("bridge.bad_mode")}),
+                    );
                 }
                 let domains: Vec<String> = payload
                     .get("domains")
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).take(2000).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .take(2000)
+                            .collect()
+                    })
                     .unwrap_or_default();
                 if domains.is_empty() {
-                    return respond(request, origin.as_deref(), 400, json!({"ok": false, "error": "domains[] is empty"}));
+                    return respond(
+                        request,
+                        origin.as_deref(),
+                        400,
+                        json!({"ok": false, "error": "domains[] is empty"}),
+                    );
                 }
                 match self.store.add_domains(profile.as_deref(), &mode, &domains) {
                     Ok(report) => {
-                        let added = report.get("added").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
-                        self.store.log("INFO", &integra_core::i18n::tr_with("bridge.bulk_log", &[("added", &added.to_string()), ("mode", &mode)]));
+                        let added = report
+                            .get("added")
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.len())
+                            .unwrap_or(0);
+                        self.store.log(
+                            "INFO",
+                            &integra_core::i18n::tr_with(
+                                "bridge.bulk_log",
+                                &[("added", &added.to_string()), ("mode", &mode)],
+                            ),
+                        );
                         let mut out = report;
                         if let Value::Object(map) = &mut out {
                             map.insert("ok".into(), json!(true));
@@ -286,7 +411,12 @@ impl BridgeServer {
                         }
                         respond(request, origin.as_deref(), 200, out);
                     }
-                    Err(err) => respond(request, origin.as_deref(), 400, json!({"ok": false, "error": err})),
+                    Err(err) => respond(
+                        request,
+                        origin.as_deref(),
+                        400,
+                        json!({"ok": false, "error": err}),
+                    ),
                 }
             }
             (Method::Delete, "/api/domain") => {
@@ -295,15 +425,41 @@ impl BridgeServer {
                 match integra_core::normalize_host(&raw, true) {
                     Ok(domain) => match self.store.remove_domain(profile.as_deref(), &domain) {
                         Ok(removed) => {
-                            self.store.log("INFO", &integra_core::i18n::tr_with("bridge.domain_removed_log", &[("domain", &domain)]));
-                            respond(request, origin.as_deref(), 200, json!({"ok": true, "domain": domain, "removed_from": removed, "restart_required": !removed.is_empty()}));
+                            self.store.log(
+                                "INFO",
+                                &integra_core::i18n::tr_with(
+                                    "bridge.domain_removed_log",
+                                    &[("domain", &domain)],
+                                ),
+                            );
+                            respond(
+                                request,
+                                origin.as_deref(),
+                                200,
+                                json!({"ok": true, "domain": domain, "removed_from": removed, "restart_required": !removed.is_empty()}),
+                            );
                         }
-                        Err(err) => respond(request, origin.as_deref(), 400, json!({"ok": false, "error": err})),
+                        Err(err) => respond(
+                            request,
+                            origin.as_deref(),
+                            400,
+                            json!({"ok": false, "error": err}),
+                        ),
                     },
-                    Err(err) => respond(request, origin.as_deref(), 400, json!({"ok": false, "error": err.to_string()})),
+                    Err(err) => respond(
+                        request,
+                        origin.as_deref(),
+                        400,
+                        json!({"ok": false, "error": err.to_string()}),
+                    ),
                 }
             }
-            (_, _) => respond(request, origin.as_deref(), 404, json!({"ok": false, "error": integra_core::i18n::tr("bridge.route_missing")})),
+            (_, _) => respond(
+                request,
+                origin.as_deref(),
+                404,
+                json!({"ok": false, "error": integra_core::i18n::tr("bridge.route_missing")}),
+            ),
         }
     }
 
@@ -312,19 +468,35 @@ impl BridgeServer {
             Ok(payload) => payload,
             Err((status, err)) => return respond(request, origin, status, err),
         };
-        let code = payload.get("code").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        let code = payload
+            .get("code")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let pairing = self.pairing.lock();
         let valid = pairing.expires > Instant::now()
             && bool::from(code.as_bytes().ct_eq(pairing.code.as_bytes()));
         if !valid {
             drop(pairing);
-            return respond(request, origin, 401, json!({"ok": false, "error": integra_core::i18n::tr("bridge.bad_pair_code")}));
+            return respond(
+                request,
+                origin,
+                401,
+                json!({"ok": false, "error": integra_core::i18n::tr("bridge.bad_pair_code")}),
+            );
         }
         let token = self.token.lock().clone();
         let port = self.actual_port();
         drop(pairing);
-        self.store.log("INFO", &integra_core::i18n::tr("bridge.connected"));
-        respond(request, origin, 200, json!({"ok": true, "token": token, "port": port, "api_version": API_VERSION}));
+        self.store
+            .log("INFO", &integra_core::i18n::tr("bridge.connected"));
+        respond(
+            request,
+            origin,
+            200,
+            json!({"ok": true, "token": token, "port": port, "api_version": API_VERSION}),
+        );
     }
 
     fn token_ok(&self, request: &Request) -> bool {
@@ -343,7 +515,12 @@ impl BridgeServer {
             .find(|h| h.field.equiv("Content-Length"))
             .and_then(|h| h.value.as_str().parse::<usize>().ok())
             .unwrap_or(0);
-        let fail = |key: &str| Err((400u16, json!({"ok": false, "error": integra_core::i18n::tr(key)})));
+        let fail = |key: &str| {
+            Err((
+                400u16,
+                json!({"ok": false, "error": integra_core::i18n::tr(key)}),
+            ))
+        };
         if length == 0 || length > MAX_BODY_BYTES {
             return fail("bridge.bad_length");
         }
@@ -361,7 +538,10 @@ impl BridgeServer {
 
 fn fresh_pairing() -> Pairing {
     let code = format!("{:06}", rand::thread_rng().gen_range(0..1_000_000u32));
-    Pairing { code, expires: Instant::now() + PAIRING_TTL }
+    Pairing {
+        code,
+        expires: Instant::now() + PAIRING_TTL,
+    }
 }
 
 fn split_query(path: &str) -> (String, String) {
@@ -415,7 +595,9 @@ fn header_value(request: &Request, name: &str) -> Option<String> {
 
 fn valid_origin(origin: Option<&str>) -> bool {
     match origin {
-        Some(origin) => origin.starts_with("chrome-extension://") || origin.starts_with("moz-extension://"),
+        Some(origin) => {
+            origin.starts_with("chrome-extension://") || origin.starts_with("moz-extension://")
+        }
         None => true, // non-browser clients (curl, tests) carry no Origin
     }
 }
@@ -424,7 +606,8 @@ fn with_cors<R: Read>(response: Response<R>, origin: Option<&str>) -> Response<R
     let mut response = response;
     if let Some(origin) = origin {
         if origin.starts_with("chrome-extension://") || origin.starts_with("moz-extension://") {
-            if let Ok(header) = Header::from_bytes("Access-Control-Allow-Origin", origin.as_bytes()) {
+            if let Ok(header) = Header::from_bytes("Access-Control-Allow-Origin", origin.as_bytes())
+            {
                 response.add_header(header);
             }
             if let Ok(header) = Header::from_bytes("Vary", b"Origin") {
@@ -433,7 +616,10 @@ fn with_cors<R: Read>(response: Response<R>, origin: Option<&str>) -> Response<R
         }
     }
     for (name, value) in [
-        ("Access-Control-Allow-Headers", "Authorization, Content-Type"),
+        (
+            "Access-Control-Allow-Headers",
+            "Authorization, Content-Type",
+        ),
         ("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"),
         ("Cache-Control", "no-store"),
         ("X-Content-Type-Options", "nosniff"),
@@ -449,14 +635,16 @@ fn respond(request: Request, origin: Option<&str>, status: u16, payload: Value) 
     let body = serde_json::to_vec(&payload).unwrap_or_default();
     let response = Response::from_data(body).with_status_code(StatusCode(status));
     let response = with_cors(response, origin);
-    let response = response.with_header(Header::from_bytes("Content-Type", b"application/json; charset=utf-8").unwrap());
+    let response = response.with_header(
+        Header::from_bytes("Content-Type", b"application/json; charset=utf-8").unwrap(),
+    );
     let _ = request.respond(response);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read as _, Write};
+    use std::io::Write;
     use std::net::TcpStream;
 
     struct MockStore;
@@ -472,12 +660,24 @@ mod tests {
             json!({"bypass": 3, "exclude": 1})
         }
         fn contains(&self, _profile: Option<&str>, domain: &str) -> (bool, bool) {
-            (domain == "in-bypass.example", domain == "in-exclude.example")
+            (
+                domain == "in-bypass.example",
+                domain == "in-exclude.example",
+            )
         }
-        fn add_domains(&self, _profile: Option<&str>, mode: &str, domains: &[String]) -> Result<Value, String> {
+        fn add_domains(
+            &self,
+            _profile: Option<&str>,
+            mode: &str,
+            domains: &[String],
+        ) -> Result<Value, String> {
             Ok(json!({"added": domains, "duplicates": [], "invalid": [], "mode": mode}))
         }
-        fn remove_domain(&self, _profile: Option<&str>, domain: &str) -> Result<Vec<String>, String> {
+        fn remove_domain(
+            &self,
+            _profile: Option<&str>,
+            domain: &str,
+        ) -> Result<Vec<String>, String> {
             Ok(vec!["list-general".into(), domain.len().to_string()])
         }
         fn measure_latency(&self, _host: &str) -> (bool, Option<u64>, Option<String>) {
@@ -488,11 +688,17 @@ mod tests {
 
     fn raw_request(port: u16, request: &str) -> (u16, String) {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
         stream.write_all(request.as_bytes()).unwrap();
         let mut buf = String::new();
         let _ = stream.read_to_string(&mut buf);
-        let status = buf.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let status = buf
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         let body = buf.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
         (status, body)
     }
@@ -504,12 +710,18 @@ mod tests {
         assert!(port > 0);
 
         // /health is open.
-        let (status, body) = raw_request(port, "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let (status, body) = raw_request(
+            port,
+            "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
         assert_eq!(status, 200);
         assert!(body.contains("integra-bridge"));
 
         // API requires the token.
-        let (status, _) = raw_request(port, "GET /api/status HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let (status, _) = raw_request(
+            port,
+            "GET /api/status HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
         assert_eq!(status, 401);
 
         // Wrong pairing code.

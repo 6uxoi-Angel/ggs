@@ -28,9 +28,19 @@ pub enum Status {
 
 #[derive(Debug, Clone)]
 pub enum ManagerEvent {
-    Status { profile: String, status: Status, pid: u32 },
-    Log { level: String, message: String },
-    Error { profile: String, message: String },
+    Status {
+        profile: String,
+        status: Status,
+        pid: u32,
+    },
+    Log {
+        level: String,
+        message: String,
+    },
+    Error {
+        profile: String,
+        message: String,
+    },
 }
 
 struct Runtime {
@@ -82,19 +92,19 @@ impl ZapretManager {
     }
 
     fn log(&self, level: &str, message: String) {
-        self.emit(ManagerEvent::Log { level: level.to_string(), message });
+        self.emit(ManagerEvent::Log {
+            level: level.to_string(),
+            message,
+        });
     }
 
     // ── validation & discovery ───────────────────────────────
 
     pub fn winws_path(&self) -> Option<PathBuf> {
         let path = self.path.lock();
-        for candidate in [path.join("bin").join("winws.exe"), path.join("winws.exe")] {
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-        None
+        [path.join("bin").join("winws.exe"), path.join("winws.exe")]
+            .into_iter()
+            .find(|candidate| candidate.is_file())
     }
 
     /// Pure filesystem validation (works on any OS, used by tests and UI).
@@ -117,7 +127,9 @@ impl ZapretManager {
     }
 
     fn runtime_bat_path(&self) -> PathBuf {
-        self.path.lock().join(format!(".integra-runtime-{}.bat", self.profile_id))
+        self.path
+            .lock()
+            .join(format!(".integra-runtime-{}.bat", self.profile_id))
     }
 
     // ── start / stop ─────────────────────────────────────────
@@ -174,7 +186,9 @@ impl ZapretManager {
                 .stdout(Stdio::from(log_file))
                 .stderr(Stdio::from(log_err))
                 .creation_flags(crate::win::CREATE_NO_WINDOW_FLAG);
-            let launcher = command.spawn().map_err(|e| ZapretError::StartFailed(e.to_string()))?;
+            let launcher = command
+                .spawn()
+                .map_err(|e| ZapretError::StartFailed(e.to_string()))?;
             let launcher_pid = launcher.id();
 
             let mut runtime_guard = self.runtime.lock();
@@ -220,10 +234,17 @@ impl ZapretManager {
             if let Some(runtime) = self.runtime.lock().as_mut() {
                 runtime.winws_pid = Some(pid);
             }
-            self.emit(ManagerEvent::Status { profile: self.profile_id.clone(), status: Status::Running, pid });
+            self.emit(ManagerEvent::Status {
+                profile: self.profile_id.clone(),
+                status: Status::Running,
+                pid,
+            });
             self.log(
                 "SUCCESS",
-                tr_with("zapret.started", &[("strategy", &strategy_name), ("pid", &pid.to_string())]),
+                tr_with(
+                    "zapret.started",
+                    &[("strategy", &strategy_name), ("pid", &pid.to_string())],
+                ),
             );
             Ok(pid)
         }
@@ -261,9 +282,16 @@ impl ZapretManager {
         }
 
         let _ = std::fs::remove_file(&runtime.bat);
-        self.emit(ManagerEvent::Status { profile: self.profile_id.clone(), status: Status::Stopped, pid: 0 });
+        self.emit(ManagerEvent::Status {
+            profile: self.profile_id.clone(),
+            status: Status::Stopped,
+            pid: 0,
+        });
         if killed > 0 {
-            self.log("INFO", tr_with("zapret.stopped_count", &[("count", &killed.to_string())]));
+            self.log(
+                "INFO",
+                tr_with("zapret.stopped_count", &[("count", &killed.to_string())]),
+            );
         } else if report_when_idle {
             self.log("INFO", integra_core::i18n::tr("zapret.already_stopped"));
         }
@@ -298,7 +326,7 @@ impl ZapretManager {
                 .lock()
                 .as_ref()
                 .and_then(|r| r.winws_pid)
-                .is_some_and(|pid| crate::win::process_alive(pid));
+                .is_some_and(crate::win::process_alive);
             if own_running {
                 return Status::Running;
             }
@@ -359,7 +387,14 @@ impl ZapretManager {
             let output = if path.join("service_install.bat").is_file() {
                 crate::win::run_hidden(
                     "cmd.exe",
-                    &["/d", "/q", "/c", "call", "service_install.bat", &strategy_name],
+                    &[
+                        "/d",
+                        "/q",
+                        "/c",
+                        "call",
+                        "service_install.bat",
+                        &strategy_name,
+                    ],
                     Some(&path),
                     None,
                     Duration::from_secs(150),
@@ -405,10 +440,25 @@ impl ZapretManager {
                 return Err(ZapretError::InstallFailed(details));
             }
 
-            let status = if running { Status::Service } else { Status::Stopped };
-            self.emit(ManagerEvent::Status { profile: self.profile_id.clone(), status, pid: self.pid() });
-            let running_label = if running { integra_core::i18n::tr("zapret.and_started") } else { String::new() };
-            self.log("SUCCESS", tr_with("zapret.service_installed", &[("running", &running_label)]));
+            let status = if running {
+                Status::Service
+            } else {
+                Status::Stopped
+            };
+            self.emit(ManagerEvent::Status {
+                profile: self.profile_id.clone(),
+                status,
+                pid: self.pid(),
+            });
+            let running_label = if running {
+                integra_core::i18n::tr("zapret.and_started")
+            } else {
+                String::new()
+            };
+            self.log(
+                "SUCCESS",
+                tr_with("zapret.service_installed", &[("running", &running_label)]),
+            );
             Ok(())
         }
     }
@@ -439,9 +489,15 @@ impl ZapretManager {
                 std::thread::sleep(Duration::from_millis(300));
             }
             if installed {
-                return Err(ZapretError::RemoveFailed(integra_core::i18n::tr("zapret.remove_retry")));
+                return Err(ZapretError::RemoveFailed(integra_core::i18n::tr(
+                    "zapret.remove_retry",
+                )));
             }
-            self.emit(ManagerEvent::Status { profile: self.profile_id.clone(), status: Status::Stopped, pid: 0 });
+            self.emit(ManagerEvent::Status {
+                profile: self.profile_id.clone(),
+                status: Status::Stopped,
+                pid: 0,
+            });
             self.log("INFO", integra_core::i18n::tr("zapret.service_removed"));
             Ok(())
         }
@@ -450,7 +506,9 @@ impl ZapretManager {
 
 #[cfg(windows)]
 fn read_log_tail(path: &Path, limit: usize) -> String {
-    let Ok(bytes) = std::fs::read(path) else { return String::new() };
+    let Ok(bytes) = std::fs::read(path) else {
+        return String::new();
+    };
     let start = bytes.len().saturating_sub(limit);
     decode_tail(&bytes[start..])
 }
@@ -489,7 +547,11 @@ mod tests {
 
     fn fake_install(dir: &TempDir) {
         std::fs::create_dir_all(dir.path().join("bin")).unwrap();
-        std::fs::write(dir.path().join("general.bat"), "@echo off\r\nstart \"z\" /min \"bin\\winws.exe\" --x\r\n").unwrap();
+        std::fs::write(
+            dir.path().join("general.bat"),
+            "@echo off\r\nstart \"z\" /min \"bin\\winws.exe\" --x\r\n",
+        )
+        .unwrap();
         std::fs::write(dir.path().join("bin").join("winws.exe"), b"stub").unwrap();
     }
 
@@ -513,9 +575,18 @@ mod tests {
         fake_install(&dir);
         let mgr = ZapretManager::new("p2", dir.path());
         if cfg!(not(windows)) {
-            assert!(matches!(mgr.start("general.bat"), Err(ZapretError::WindowsOnly)));
-            assert!(matches!(mgr.install_service("general.bat"), Err(ZapretError::WindowsOnly)));
-            assert!(matches!(mgr.remove_service(), Err(ZapretError::WindowsOnly)));
+            assert!(matches!(
+                mgr.start("general.bat"),
+                Err(ZapretError::WindowsOnly)
+            ));
+            assert!(matches!(
+                mgr.install_service("general.bat"),
+                Err(ZapretError::WindowsOnly)
+            ));
+            assert!(matches!(
+                mgr.remove_service(),
+                Err(ZapretError::WindowsOnly)
+            ));
             assert_eq!(mgr.status(), Status::Stopped);
             assert_eq!(mgr.service_state(true), (false, false));
         }

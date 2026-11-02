@@ -66,13 +66,12 @@ fn agent() -> ureq::Agent {
 
 /// Ask GitHub for the latest Flowseal release (and its .zip asset).
 pub fn fetch_latest() -> Result<LatestRelease, ZapretError> {
-    let response = agent()
-        .get(RELEASES_API)
-        .call()
-        .map_err(|e| ZapretError::Maintenance(integra_core::i18n::tr_with(
+    let response = agent().get(RELEASES_API).call().map_err(|e| {
+        ZapretError::Maintenance(integra_core::i18n::tr_with(
             "maint.network_error",
             &[("error", &e.to_string())],
-        )))?;
+        ))
+    })?;
 
     let mut body = String::new();
     response
@@ -111,28 +110,26 @@ pub fn fetch_latest() -> Result<LatestRelease, ZapretError> {
         tag,
         version,
         name: display_name,
-        published_at: json["published_at"].as_str().unwrap_or_default().to_string(),
+        published_at: json["published_at"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
         download_url,
         size,
     })
 }
 
 /// Stream `url` into `dest` reporting (copied, total) progress.
-pub fn download(
-    url: &str,
-    dest: &Path,
-    progress: &dyn Fn(u64, u64),
-) -> Result<(), ZapretError> {
+pub fn download(url: &str, dest: &Path, progress: &dyn Fn(u64, u64)) -> Result<(), ZapretError> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
     }
-    let response = agent()
-        .get(url)
-        .call()
-        .map_err(|e| ZapretError::Maintenance(integra_core::i18n::tr_with(
+    let response = agent().get(url).call().map_err(|e| {
+        ZapretError::Maintenance(integra_core::i18n::tr_with(
             "maint.network_error",
             &[("error", &e.to_string())],
-        )))?;
+        ))
+    })?;
 
     let total = response
         .header("Content-Length")
@@ -227,7 +224,9 @@ pub fn safe_extract(archive_path: &Path, dest_dir: &Path) -> Result<(), ZapretEr
 
         total_bytes += entry.size();
         if total_bytes > MAX_TOTAL_UNPACKED || file_count > MAX_FILES {
-            return Err(ZapretError::Maintenance("archive exceeds safety limits".into()));
+            return Err(ZapretError::Maintenance(
+                "archive exceeds safety limits".into(),
+            ));
         }
 
         if let Some(parent) = out_path.parent() {
@@ -260,7 +259,7 @@ fn write_meta(dir: &Path, version: &str) -> Result<(), ZapretError> {
 fn looks_like_install(dir: &Path) -> bool {
     dir.join("bin").join("winws.exe").is_file()
         || dir.join("winws.exe").is_file()
-        || crate::strategy::discover(dir).len() > 0
+        || !crate::strategy::discover(dir).is_empty()
 }
 
 fn timestamp() -> String {
@@ -273,7 +272,11 @@ fn timestamp() -> String {
 /// `.integra-backup-<ts>` (if any) → move extracted contents into place →
 /// migrate user lists → write metadata. On failure the backup is restored
 /// and the error returned.
-pub fn install_release(archive: &Path, target_dir: &Path, version: &str) -> Result<(), ZapretError> {
+pub fn install_release(
+    archive: &Path,
+    target_dir: &Path,
+    version: &str,
+) -> Result<(), ZapretError> {
     if !target_dir.is_dir() {
         return Err(ZapretError::Maintenance("profile folder is missing".into()));
     }
@@ -391,7 +394,9 @@ fn cleanup_old_backups(target_dir: &Path) {
             let mut backups: Vec<(String, PathBuf)> = entries
                 .filter_map(|e| e.ok())
                 .filter(|e| {
-                    e.file_name().to_string_lossy().starts_with(".integra-backup-")
+                    e.file_name()
+                        .to_string_lossy()
+                        .starts_with(".integra-backup-")
                 })
                 .map(|e| (e.file_name().to_string_lossy().to_string(), e.path()))
                 .collect();
@@ -409,7 +414,6 @@ mod tests {
     use super::*;
     use chrono::DateTime;
     use integra_core::lists::tempfile_lite::TempDir;
-    use std::io::Write as _;
 
     fn build_zip(path: &Path, entries: &[(&str, &[u8])], with_traversal: bool) {
         let file = fs::File::create(path).unwrap();
@@ -448,14 +452,21 @@ mod tests {
         let zip_path = dir.path().join("good.zip");
         build_zip(
             &zip_path,
-            &[("bin/winws.exe", b"stub"), ("general.bat", b"@echo off"), ("lists/list-general.txt", b"example.com\n")],
+            &[
+                ("bin/winws.exe", b"stub"),
+                ("general.bat", b"@echo off"),
+                ("lists/list-general.txt", b"example.com\n"),
+            ],
             false,
         );
         let out = dir.path().join("out");
         safe_extract(&zip_path, &out).unwrap();
         assert!(out.join("bin/winws.exe").is_file());
         assert!(out.join("general.bat").is_file());
-        assert_eq!(fs::read_to_string(out.join("lists/list-general.txt")).unwrap(), "example.com\n");
+        assert_eq!(
+            fs::read_to_string(out.join("lists/list-general.txt")).unwrap(),
+            "example.com\n"
+        );
     }
 
     #[test]
@@ -485,13 +496,23 @@ mod tests {
             fs::create_dir_all(target.join("bin")).unwrap();
             fs::write(target.join("bin").join("winws.exe"), b"old").unwrap();
         });
-        fs::write(target.join("lists").join("list-general.txt"), "old-list.example\n").unwrap();
+        fs::write(
+            target.join("lists").join("list-general.txt"),
+            "old-list.example\n",
+        )
+        .unwrap();
 
         // New archive without lists (must inherit them).
         let zip_path = dir.path().join("new.zip");
         build_zip(
             &zip_path,
-            &[("bin/winws.exe", b"new"), ("general.bat", b"@echo off\r\nstart \"z\" /min \"bin\\winws.exe\"\r\n")],
+            &[
+                ("bin/winws.exe", b"new"),
+                (
+                    "general.bat",
+                    b"@echo off\r\nstart \"z\" /min \"bin\\winws.exe\"\r\n",
+                ),
+            ],
             false,
         );
 
@@ -508,7 +529,8 @@ mod tests {
         );
         assert_eq!(installed_version(&target).as_deref(), Some("9.9.9"));
         let meta: InstallMeta =
-            serde_json::from_str(&fs::read_to_string(target.join(".integra-zapret.json")).unwrap()).unwrap();
+            serde_json::from_str(&fs::read_to_string(target.join(".integra-zapret.json")).unwrap())
+                .unwrap();
         assert_eq!(meta.version, "9.9.9");
         assert!(DateTime::parse_from_rfc3339(&meta.installed_at).is_ok());
 
@@ -517,7 +539,11 @@ mod tests {
         let has_backup = fs::read_dir(parent)
             .unwrap()
             .filter_map(|e| e.ok())
-            .any(|e| e.file_name().to_string_lossy().starts_with(".integra-backup-"));
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".integra-backup-")
+            });
         assert!(has_backup);
 
         // A broken archive must roll the previous install back.
@@ -547,7 +573,9 @@ mod tests {
             json["assets"][0]["browser_download_url"].as_str(),
             Some("https://example.com/x.zip")
         );
-        let version = crate::version::Version::parse("v1.6.2").unwrap().to_string();
+        let version = crate::version::Version::parse("v1.6.2")
+            .unwrap()
+            .to_string();
         assert_eq!(version, "1.6.2");
     }
 }

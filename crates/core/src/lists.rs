@@ -27,11 +27,31 @@ pub enum ListKind {
 }
 
 pub const LISTS: [ListSpec; 5] = [
-    ListSpec { id: "list-general", file: "list-general.txt", kind: ListKind::Mixed },
-    ListSpec { id: "list-exclude", file: "list-exclude.txt", kind: ListKind::Mixed },
-    ListSpec { id: "list-google", file: "list-google.txt", kind: ListKind::Domains },
-    ListSpec { id: "ipset-all", file: "ipset-all.txt", kind: ListKind::Networks },
-    ListSpec { id: "ipset-exclude", file: "ipset-exclude.txt", kind: ListKind::Networks },
+    ListSpec {
+        id: "list-general",
+        file: "list-general.txt",
+        kind: ListKind::Mixed,
+    },
+    ListSpec {
+        id: "list-exclude",
+        file: "list-exclude.txt",
+        kind: ListKind::Mixed,
+    },
+    ListSpec {
+        id: "list-google",
+        file: "list-google.txt",
+        kind: ListKind::Domains,
+    },
+    ListSpec {
+        id: "ipset-all",
+        file: "ipset-all.txt",
+        kind: ListKind::Networks,
+    },
+    ListSpec {
+        id: "ipset-exclude",
+        file: "ipset-exclude.txt",
+        kind: ListKind::Networks,
+    },
 ];
 
 pub fn find_spec(id: &str) -> Option<&'static ListSpec> {
@@ -131,7 +151,9 @@ pub struct ListsManager {
 
 impl ListsManager {
     pub fn new(zapret_path: impl Into<PathBuf>) -> Self {
-        Self { root: Mutex::new(zapret_path.into()) }
+        Self {
+            root: Mutex::new(zapret_path.into()),
+        }
     }
 
     pub fn set_root(&self, zapret_path: impl Into<PathBuf>) {
@@ -157,7 +179,9 @@ impl ListsManager {
     }
 
     pub fn read(&self, id: &str) -> Vec<String> {
-        let Some(path) = self.list_path(id) else { return Vec::new() };
+        let Some(path) = self.list_path(id) else {
+            return Vec::new();
+        };
         match fs::read_to_string(&path) {
             Ok(text) => text
                 .lines()
@@ -177,13 +201,17 @@ impl ListsManager {
 
     pub fn contains(&self, id: &str, entry: &str) -> bool {
         let needle = entry.trim().to_ascii_lowercase();
-        self.read(id).iter().any(|l| l.trim().to_ascii_lowercase() == needle)
+        self.read(id)
+            .iter()
+            .any(|l| l.trim().to_ascii_lowercase() == needle)
     }
 
     /// Add many entries at once. Each entry is validated & normalized;
     /// duplicates are reported, not re-added. Comments are appended verbatim.
     pub fn add(&self, id: &str, entries: &[String]) -> Result<BulkReport, DomainError> {
-        let Some(spec) = find_spec(id) else { return Err(DomainError::CannotParse) };
+        let Some(spec) = find_spec(id) else {
+            return Err(DomainError::CannotParse);
+        };
         let guard = self.root.lock(); // serialize writers
         let path = Self::lists_dir_no_lock(&guard).join(spec.file);
 
@@ -191,7 +219,10 @@ impl ListsManager {
             Ok(text) => text.lines().map(|l| l.trim_end().to_string()).collect(),
             Err(_) => Vec::new(),
         };
-        let mut existing: HashSet<String> = lines.iter().map(|l| l.trim().to_ascii_lowercase()).collect();
+        let mut existing: HashSet<String> = lines
+            .iter()
+            .map(|l| l.trim().to_ascii_lowercase())
+            .collect();
 
         let mut report = BulkReport::default();
         for raw in entries {
@@ -226,10 +257,14 @@ impl ListsManager {
 
     /// Remove a single entry (case-insensitive). Returns true when the file changed.
     pub fn remove(&self, id: &str, entry: &str) -> std::io::Result<bool> {
-        let Some(spec) = find_spec(id) else { return Ok(false) };
+        let Some(spec) = find_spec(id) else {
+            return Ok(false);
+        };
         let guard = self.root.lock();
         let path = Self::lists_dir_no_lock(&guard).join(spec.file);
-        let Ok(text) = fs::read_to_string(&path) else { return Ok(false) };
+        let Ok(text) = fs::read_to_string(&path) else {
+            return Ok(false);
+        };
         let needle = entry.trim().to_ascii_lowercase();
         let mut removed = false;
         let kept: Vec<String> = text
@@ -263,7 +298,10 @@ impl ListsManager {
     /// Overwrite the whole list (used by the UI bulk editor).
     pub fn replace(&self, id: &str, lines: &[String]) -> std::io::Result<BulkReport> {
         let Some(spec) = find_spec(id) else {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "unknown list"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "unknown list",
+            ));
         };
         let guard = self.root.lock();
         let path = Self::lists_dir_no_lock(&guard).join(spec.file);
@@ -352,7 +390,9 @@ mod tests {
     #[test]
     fn networks_go_to_ipset() {
         let (_dir, mgr) = setup();
-        let report = mgr.add("ipset-all", &["10.0.0.0/8".into(), "8.8.8.8".into()]).unwrap();
+        let report = mgr
+            .add("ipset-all", &["10.0.0.0/8".into(), "8.8.8.8".into()])
+            .unwrap();
         assert_eq!(report.added.len(), 2);
         assert!(mgr.contains("ipset-all", "10.0.0.0/8"));
     }

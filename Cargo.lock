@@ -1790,7 +1790,6 @@ dependencies = [
  "integra-core",
  "integra-diag",
  "integra-netmon",
- "integra-remote",
  "integra-zapret",
  "parking_lot",
  "serde",
@@ -1854,16 +1853,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "windows 0.61.3",
-]
-
-[[package]]
-name = "integra-remote"
-version = "1.0.0"
-dependencies = [
- "serde",
- "serde_json",
- "ureq",
- "uuid",
 ]
 
 [[package]]

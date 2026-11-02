@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 pub fn application_root() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if is_packaged(&exe) {
-            return exe.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+            return exe
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
         }
     }
     // Source run: CARGO_MANIFEST_DIR points at crates/<name>.

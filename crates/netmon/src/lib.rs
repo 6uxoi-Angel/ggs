@@ -14,10 +14,10 @@ pub mod collector;
 pub mod services;
 pub mod tracker;
 
-#[cfg(windows)]
-pub mod windows_tables;
 #[cfg(target_os = "linux")]
 pub mod procfs;
+#[cfg(windows)]
+pub mod windows_tables;
 
 use std::net::{IpAddr, SocketAddr};
 
