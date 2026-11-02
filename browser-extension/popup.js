@@ -8,6 +8,7 @@ import {
   clearState,
   isPairCode,
   loadState,
+  normalizeDomains,
   profileOption,
   qs,
   saveState,
@@ -61,6 +62,7 @@ const MESSAGES = {
     capturedNone: 'Ссылки не найдены — на этой странице нечего захватывать.',
     capturedMsg: 'Найдено доменов: {n}. {detail}',
     errEmptyDomain: 'Нет домена: открой сайт или введи адрес вручную.',
+    errInvalidDomain: 'Некорректный домен: укажи адрес вида example.com.',
     errNoTab: 'Не удалось определить активную вкладку.',
     errInject: 'На этой странице нельзя захватывать ссылки (служебная страница браузера).',
     errAddFailed: 'Не удалось изменить список. Проверь адрес и попробуй ещё раз.',
@@ -114,6 +116,7 @@ const MESSAGES = {
     capturedNone: 'No links found — there is nothing to capture on this page.',
     capturedMsg: 'Domains found: {n}. {detail}',
     errEmptyDomain: 'No domain: open a website or type an address manually.',
+    errInvalidDomain: 'Invalid domain: use an address like example.com.',
     errNoTab: 'Could not detect the active tab.',
     errInject: 'Links cannot be captured on this page (a browser service page).',
     errAddFailed: 'Could not update the list. Check the address and try again.',
@@ -140,6 +143,7 @@ const state = {
   port: DEFAULT_PORT,
   profile: '',
   captureMode: 'bypass',
+  apiVersion: null,
 };
 let probedPort = DEFAULT_PORT; // port verified by /health during pairing
 let tabHost = null;            // hostname of the active tab
@@ -170,13 +174,17 @@ const els = {
 function show(el) { el.classList.remove('hidden'); }
 function hide(el) { el.classList.add('hidden'); }
 
-let toastTimer = null;
+/** Stacked toast: each call adds a bubble; bubbles expire on their own timer. */
 function toast(text, kind = '') {
-  els.toast.textContent = text;
-  els.toast.className = `toast ${kind}`;
+  const item = document.createElement('div');
+  item.className = `toast-item ${kind}`;
+  item.textContent = text;
+  els.toast.appendChild(item);
   show(els.toast);
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => hide(els.toast), 4200);
+  setTimeout(() => {
+    item.remove();
+    if (els.toast.childElementCount === 0) hide(els.toast);
+  }, 4200);
 }
 
 function showBanner(text, { error = false, actionText = null, onAction = null } = {}) {
@@ -199,7 +207,7 @@ function hideBanner() { hide(els.banner); }
 
 function setBusy(value) {
   busy = value;
-  for (const b of [els.pairBtn, els.addBypass, els.addExclude, els.removeDomain, els.captureBtn, els.pairPortCheck]) {
+  for (const b of [els.pairBtn, els.addBypass, els.addExclude, els.removeDomain, els.captureBtn, els.pairPortCheck, els.refreshBtn, els.profileSelect, els.segBypass, els.segExclude, els.disconnectBtn]) {
     b.disabled = value;
   }
 }
@@ -273,6 +281,7 @@ async function probeAndReport() {
 }
 
 async function checkPort() {
+  if (busy) return;
   const port = Number(els.pairPort.value);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) {
     pairError(t('errPort', { port: els.pairPort.value || '?' }));
@@ -293,6 +302,7 @@ async function checkPort() {
 }
 
 async function doPair() {
+  if (busy) return;
   const code = els.pairCode.value.trim();
   if (!isPairCode(code)) {
     pairError(t('errBadCodeFormat'));
@@ -324,7 +334,8 @@ async function doPair() {
   state.token = res.data.token;
   state.port = Number(res.data.port) || probedPort;
   state.profile = '';
-  await saveState({ token: state.token, port: state.port, profile: '', apiVersion: res.data.api_version ?? 2 });
+  state.apiVersion = res.data.api_version ?? 2;
+  await saveState({ token: state.token, port: state.port, profile: '', apiVersion: state.apiVersion });
 
   els.pairSuccess.textContent = t('okPaired');
   show(els.pairSuccess);
@@ -355,7 +366,7 @@ function showMain() {
   show(els.viewMain);
   els.zapretState.textContent = t('profileLoading');
   els.strategyValue.textContent = '—';
-  els.footMeta.textContent = t('footPort', { port: state.port, api: '?' });
+  els.footMeta.textContent = t('footPort', { port: state.port, api: state.apiVersion ?? '?' });
 }
 
 function renderStatus(data) {
@@ -473,9 +484,15 @@ function reportOutcome(reports) {
 }
 
 async function addDomain(mode) {
-  const domain = currentTarget();
-  if (!domain) {
+  if (busy) return;
+  const raw = currentTarget();
+  if (!raw) {
     toast(t('errEmptyDomain'), 'err');
+    return;
+  }
+  const [domain] = normalizeDomains([raw]);
+  if (!domain) {
+    toast(t('errInvalidDomain'), 'err');
     return;
   }
   setBusy(true);
@@ -495,9 +512,15 @@ async function addDomain(mode) {
 }
 
 async function removeDomain() {
-  const domain = currentTarget();
-  if (!domain) {
+  if (busy) return;
+  const raw = currentTarget();
+  if (!raw) {
     toast(t('errEmptyDomain'), 'err');
+    return;
+  }
+  const [domain] = normalizeDomains([raw]);
+  if (!domain) {
+    toast(t('errInvalidDomain'), 'err');
     return;
   }
   setBusy(true);
@@ -523,6 +546,7 @@ async function removeDomain() {
 }
 
 async function captureLinks() {
+  if (busy) return;
   setBusy(true);
   els.captureBtn.textContent = t('captureBusy');
   let resp;
@@ -553,6 +577,7 @@ async function forgetPairing() {
   await clearState();
   state.token = null;
   state.profile = '';
+  state.apiVersion = null;
   probedPort = state.port;
   showPair();
 }
@@ -600,6 +625,7 @@ async function init() {
   state.token = stored.token ?? null;
   state.port = Number(stored.port) || DEFAULT_PORT;
   state.profile = stored.profile ?? '';
+  state.apiVersion = stored.apiVersion ?? 2;
   probedPort = state.port;
   setCaptureMode(stored.captureMode === 'exclude' ? 'exclude' : 'bypass');
 

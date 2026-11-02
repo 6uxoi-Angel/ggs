@@ -460,10 +460,14 @@ mod tests {
 
     #[test]
     fn entry_names_are_sanitized() {
-        assert_eq!(
-            safe_entry_name("folder/file.txt").map(|p| p.to_string_lossy().to_string()),
-            Some("folder/file.txt".into())
-        );
+        // Compare path components (not the rendered string): on Windows
+        // PathBuf renders separators as `\`, on Unix as `/`.
+        let p = safe_entry_name("folder/file.txt").expect("valid entry");
+        let parts: Vec<String> = p
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(parts, ["folder", "file.txt"]);
         assert!(safe_entry_name("../evil").is_none());
         assert!(safe_entry_name("/abs").is_none());
         assert!(safe_entry_name("C:\\evil").is_none());

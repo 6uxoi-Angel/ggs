@@ -1,0 +1,21 @@
+[package]
+name = "integra-remote"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.82"
+
+[[bin]]
+name = "integra-agent"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+ureq = { version = "2", default-features = false, features = ["tls"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

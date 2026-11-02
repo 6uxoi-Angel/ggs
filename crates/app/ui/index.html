@@ -11,8 +11,11 @@
     <!-- ══ TAB BAR (taskbar) ══ -->
     <nav id="taskbar" aria-label="main navigation">
       <div class="brand" title="Integra">
-        <span class="brand-logo">I</span>
-        <span class="brand-name" data-i18n="app.brand">Integra</span>
+        <img class="brand-logo" src="icon.png" alt="" />
+        <span class="brand-text">
+          <span class="brand-name" data-i18n="app.brand">Integra</span>
+          <span class="brand-version" id="brand-version"></span>
+        </span>
       </div>
       <div id="tab-buttons" role="tablist"></div>
       <div id="tab-indicator" aria-hidden="true"></div>
@@ -188,6 +191,69 @@
         </div>
       </section>
 
+      <section id="page-analysis" class="page" hidden>
+        <header class="page-header">
+          <div>
+            <h2>Анализ: «белые списки» интернета в РФ</h2>
+            <p class="muted">Как устроена фильтрация и чем лечится каждый её режим (по материалам проекта whitelist-bypass, сентябрь 2026)</p>
+          </div>
+        </header>
+
+        <div class="card">
+          <h3 class="section-title">Проверка интернета</h3>
+          <p class="muted small">Быстрый тест: работает ли сеть, режет ли DNS, есть ли заморозка по объёму или режим белого списка.</p>
+          <div class="row gap wrap">
+            <button class="btn primary" id="btn-netcheck">Проверить интернет</button>
+            <span id="netcheck-state" class="muted small grow"></span>
+          </div>
+          <div id="netcheck-results"></div>
+        </div>
+
+        <div class="card">
+          <h3 class="section-title">Три уровня фильтрации — не путайте их</h3>
+          <table class="table">
+            <thead><tr><th>Уровень</th><th>Что фильтруется</th><th>Как выглядит сбой</th><th>Чем лечится</th></tr></thead>
+            <tbody>
+              <tr><td><b>1. SNI/Host</b></td><td>имя сайта в TLS ClientHello или HTTP Host</td><td>сайт не открывается, соединение рвётся / RST</td><td>фрагментация пакетов (sniproxy), подмена SNI, DoH</td></tr>
+              <tr><td><b>2. Объём на сессию</b></td><td>байты в одной TCP-сессии</td><td>страница грузится и замирает после ~16 КБ, разрыва нет</td><td>цепочка через РФ-узел, ротация соединений (chain-relay burst)</td></tr>
+              <tr><td><b>3. IP/CIDR/ASN</b></td><td>адрес назначения, целые автономные системы</td><td>таймаут, пакеты не идут вообще</td><td>только узел на «белом» IP внутри РФ</td></tr>
+            </tbody>
+          </table>
+          <p class="muted small">Главная ошибка — лечить уровень 3 инструментами уровня 1: если фильтрация по IP, соединение дропается до разбора SNI.</p>
+        </div>
+
+        <div class="card">
+          <h3 class="section-title">Что делать в каком режиме</h3>
+          <table class="table">
+            <thead><tr><th>Вердикт</th><th>Действие</th></tr></thead>
+            <tbody>
+              <tr><td><b>CLEAN</b></td><td>ограничений нет — ничего не нужно</td></tr>
+              <tr><td><b>BLACKLIST</b></td><td>обычный чёрный список по доменам → sniproxy (tls-split), DoH</td></tr>
+              <tr><td><b>FREEZE16K / REGISTRY_SZS</b></td><td>заморозка по объёму → цепочка из 3 узлов (РФ-мост → выходная нода), chain-relay burst для больших файлов</td></tr>
+              <tr><td><b>HARD_WHITELIST / DROP_ALL</b></td><td>фильтрация по IP/ASN → нужен узел на «белом» IP внутри РФ; проверьте свою AS (wlprobe asn)</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h3 class="section-title">Честные ограничения</h3>
+          <ul class="muted small">
+            <li>Надёжного способа сохранить доступ в режиме реестра СЗС нет — фильтрация бьёт по инфраструктуре самих средств обхода.</li>
+            <li>Поиск «белого» IP в российских облаках — лотерея: списки меняются, держите запасной узел.</li>
+            <li>Даже разрешённое работает нестабильно: доля успешных соединений в режиме реестра ≤ ~10%.</li>
+            <li>Белые списки различаются у операторов — проверяйте каждый канал отдельно.</li>
+            <li>Проводной доступ пока почти не затронут.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3 class="section-title">Правовые риски (кратко)</h3>
+          <p class="muted small">Использование VPN физлицом отдельной ответственности не влечёт; реклама VPN-сервисов — штрафы; хостинг узла обхода на территории РФ — отдельная зона риска. Это не юридическая консультация.</p>
+        </div>
+
+        <div id="analysis-full"></div>
+      </section>
+
       <section id="page-extension" class="page" hidden>
         <header class="page-header">
           <div>
@@ -205,7 +271,10 @@
           </div>
           <div id="pairing-box" class="pairing-box" hidden>
             <label class="field-label" data-i18n="extension.pairing_code"></label>
-            <div class="pairing-code" id="pairing-code">······</div>
+            <div class="row gap center">
+              <div class="pairing-code" id="pairing-code">······</div>
+              <button class="btn ghost" id="btn-pair-copy" data-i18n="common.copy"></button>
+            </div>
             <div class="row gap center">
               <span class="muted small" id="pairing-expires"></span>
               <button class="btn ghost" id="btn-pair-regen" data-i18n="extension.regenerate"></button>
@@ -258,6 +327,19 @@
     </div>
   </div>
   <div id="toasts"></div>
+
+  <!-- ═══ FIRST-RUN SETUP / COMPONENT CHECK ═══ -->
+  <div id="setup-overlay" hidden>
+    <div class="setup-card">
+      <h3 id="setup-title"></h3>
+      <p class="muted small" id="setup-subtitle"></p>
+      <div id="setup-list"></div>
+      <div class="row gap end" style="margin-top:16px">
+        <button class="btn primary" id="setup-continue"></button>
+      </div>
+    </div>
+  </div>
+
   <div id="mock-banner" hidden>PREVIEW (mock backend)</div>
 
   <script src="js/i18n-data.js"></script>

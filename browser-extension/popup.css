@@ -39,7 +39,7 @@ body {
 }
 
 .glow {
-  position: absolute;
+  position: fixed;
   width: 220px;
   height: 220px;
   border-radius: 50%;
@@ -47,8 +47,8 @@ body {
   pointer-events: none;
   z-index: 0;
 }
-.glow-top { top: -110px; right: -70px; background: rgba(245, 158, 11, 0.13); }
-.glow-bottom { bottom: -120px; left: -80px; background: rgba(245, 158, 11, 0.06); }
+.glow-top { top: 0; right: 0; background: rgba(245, 158, 11, 0.13); }
+.glow-bottom { bottom: 0; left: 0; background: rgba(245, 158, 11, 0.06); }
 
 .view, .head, .glass, .foot, .banner { position: relative; z-index: 1; }
 
@@ -294,12 +294,21 @@ input:focus-visible {
 }
 .banner.err { border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.09); color: #fca5a5; }
 
+/* Toast container stacks bubbles; each bubble is a .toast-item. */
 .toast {
   position: fixed;
   left: 50%;
   bottom: 14px;
   transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
   max-width: 92%;
+  z-index: 10;
+  pointer-events: none;
+}
+.toast-item {
   background: rgba(20, 23, 31, 0.92);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -308,14 +317,14 @@ input:focus-visible {
   font-size: 12px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(10px);
-  z-index: 10;
   animation: rise 0.18s ease-out;
+  max-width: 100%;
 }
-.toast.ok { border-color: rgba(52, 211, 153, 0.45); }
-.toast.err { border-color: rgba(248, 113, 113, 0.45); }
+.toast-item.ok { border-color: rgba(52, 211, 153, 0.45); }
+.toast-item.err { border-color: rgba(248, 113, 113, 0.45); }
 @keyframes rise {
-  from { opacity: 0; transform: translate(-50%, 6px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .foot {

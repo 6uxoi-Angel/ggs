@@ -12,7 +12,7 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, TerminateProcess, CREATE_NO_WINDOW,
+    GetCurrentProcess, OpenProcess, OpenProcessToken, TerminateProcess,
     PROCESS_QUERY_INFORMATION, PROCESS_TERMINATE,
 };
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};

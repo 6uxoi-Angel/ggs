@@ -14,6 +14,7 @@ const TABS = [
   { id: 'apps', ico: '⇄' },
   { id: 'lists', ico: '☰' },
   { id: 'diagnostics', ico: '◎' },
+  { id: 'analysis', ico: '◈' },
   { id: 'extension', ico: '⧉' },
   { id: 'logs', ico: '≣' },
   { id: 'settings', ico: '⚙' },
@@ -139,6 +140,9 @@ function confirmModal(text, onYes, danger = true) {
 function presetById(id) {
   return (state.config?.theme_presets || []).find((p) => p.id === id);
 }
+function themeVar(key) {
+  return key === 'background' ? '--bg' : key === 'tabbar' ? '--tabbar' : `--${key}`;
+}
 async function applyTheme() {
   const cfg = state.config;
   if (!cfg) return;
@@ -154,25 +158,33 @@ async function applyTheme() {
   // Custom colors must live on <body> inline style: a class rule on body
   // would otherwise override values inherited from <html>.
   const styleTarget = document.body.style;
-  for (const key of THEME_COLOR_KEYS) styleTarget.removeProperty(`--${key}`);
+  for (const key of THEME_COLOR_KEYS) styleTarget.removeProperty(themeVar(key));
   const liveColors = preset ? { ...(preset.colors || {}), ...(state.themeEdit || {}) } : state.themeEdit;
   if (liveColors) {
     for (const key of THEME_COLOR_KEYS) {
       const value = liveColors[key];
-      if (value) styleTarget.setProperty(`--${key}`, value);
+      if (value) styleTarget.setProperty(themeVar(key), value);
     }
   }
 
-  // background images
+  // background images: preset values, then live edits while customizing
   styleTarget.setProperty('--tabbar-image', 'none');
   styleTarget.setProperty('--content-image', 'none');
+  const imgSlots = [['tabbar_image', '--tabbar-image'], ['content_image', '--content-image']];
   if (preset) {
-    for (const [slot, key] of [['tabbar_image', '--tabbar-image'], ['content_image', '--content-image']]) {
+    for (const [slot, key] of imgSlots) {
       const path = preset[slot];
       if (path) {
         const url = await imageDataUrl(path);
-        if (url) rootStyle.setProperty(key, `url("${url}")`);
+        if (url) styleTarget.setProperty(key, `url("${url}")`);
       }
+    }
+  }
+  for (const [slot, key] of imgSlots) {
+    const path = state.themeEdit?.[slot];
+    if (path) {
+      const url = await imageDataUrl(path);
+      if (url) styleTarget.setProperty(key, `url("${url}")`);
     }
   }
   requestAnimationFrame(moveIndicator);
@@ -180,10 +192,35 @@ async function applyTheme() {
 async function imageDataUrl(path) {
   if (state.imageCache[path]) return state.imageCache[path];
   try {
-    const url = await T.invoke('read_image_data_url', { path });
+    const raw = await T.invoke('read_image_data_url', { path });
+    const url = await optimizeImageDataUrl(raw);
     state.imageCache[path] = url;
     return url;
   } catch { return null; }
+}
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('decode failed'));
+    img.src = src;
+  });
+}
+/** Downscale huge images so WebView2 reliably paints them as a CSS background. */
+async function optimizeImageDataUrl(raw) {
+  const MAX_SIDE = 2560;
+  const img = await loadImage(raw);
+  const maxSide = Math.max(img.naturalWidth, img.naturalHeight);
+  if (maxSide <= MAX_SIDE) return raw;
+  const k = MAX_SIDE / maxSide;
+  const w = Math.max(1, Math.round(img.naturalWidth * k));
+  const h = Math.max(1, Math.round(img.naturalHeight * k));
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  if (!ctx) return raw;
+  ctx.drawImage(img, 0, 0, w, h);
+  return c.toDataURL('image/jpeg', 0.88);
 }
 function applyTaskbar() {
   const cfg = state.config;
@@ -267,6 +304,7 @@ async function show(page) {
     case 'extension': await refreshBridge(); break;
     case 'logs': await refreshLogs(); break;
     case 'settings': renderSettings(); break;
+    case 'analysis': ensureAnalysis(); bindNetcheck(); break;
   }
 }
 
@@ -514,8 +552,8 @@ function renderNetmon() {
   if (!state.netmonSummary.length) {
     summary.innerHTML = `<div class="card"><p class="muted small">${esc(t('netmon.no_entries'))}</p></div>`;
   } else {
-    summary.innerHTML = state.netmonSummary.map((a) => `
-      <div class="card traffic-card">
+    summary.innerHTML = state.netmonSummary.map((a, i) => `
+      <div class="card traffic-card" data-idx="${i}">
         <div class="traffic-head">
           <span class="dot ${a.active ? 'pulse' : ''}"></span>
           <span class="name">${esc(a.process)}</span>
@@ -568,6 +606,126 @@ document.getElementById('netmon-table').addEventListener('click', async (e) => {
     toast(t('netmon.added_to_list', { domain: report.added[0] || btn.dataset.host, list: btn.dataset.list }), 'ok');
   } catch { /* toasted */ }
 });
+
+/* ── app card context menu (right-click) ── */
+let ctxMenuCleanup = null;
+function closeAppMenu() {
+  if (ctxMenuCleanup) { ctxMenuCleanup(); ctxMenuCleanup = null; }
+}
+document.getElementById('netmon-summary').addEventListener('contextmenu', (e) => {
+  const card = e.target.closest('.traffic-card');
+  if (!card) return;
+  e.preventDefault();
+  const app = state.netmonSummary[Number(card.dataset.idx)];
+  if (!app) return;
+  openAppMenu(e.clientX, e.clientY, app);
+});
+
+function openAppMenu(x, y, app) {
+  closeAppMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.setAttribute('role', 'menu');
+
+  const items = [
+    { label: t('netmon.add_bypass'), act: () => openIpPicker(app, 'list-general') },
+    { label: t('netmon.add_exclude'), act: () => openIpPicker(app, 'list-exclude') },
+    null,
+    {
+      label: t('netmon.copy_ip'),
+      act: async () => {
+        const addrs = app.top_remotes || [];
+        if (!addrs.length) { toast(t('netmon.no_addresses'), 'warn'); return; }
+        const ok = await copyToClipboard(addrs.join('\n'));
+        toast(ok ? t('common.copied') : t('common.copy_failed'), ok ? 'ok' : 'err');
+      },
+    },
+  ];
+  for (const it of items) {
+    if (!it) {
+      const sep = document.createElement('div');
+      sep.className = 'ctx-sep';
+      menu.appendChild(sep);
+      continue;
+    }
+    const btn = document.createElement('button');
+    btn.className = 'ctx-item';
+    btn.setAttribute('role', 'menuitem');
+    btn.textContent = it.label;
+    btn.onclick = () => { closeAppMenu(); it.act(); };
+    menu.appendChild(btn);
+  }
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
+  menu.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
+
+  const onDocDown = (ev) => { if (!menu.contains(ev.target)) closeAppMenu(); };
+  const onKey = (ev) => { if (ev.key === 'Escape') closeAppMenu(); };
+  const onScroll = () => closeAppMenu();
+  ctxMenuCleanup = () => {
+    menu.remove();
+    document.removeEventListener('mousedown', onDocDown, true);
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('blur', closeAppMenu);
+    document.removeEventListener('scroll', onScroll, true);
+  };
+  setTimeout(() => {
+    if (!ctxMenuCleanup) return;
+    document.addEventListener('mousedown', onDocDown, true);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('blur', closeAppMenu);
+    document.addEventListener('scroll', onScroll, true);
+  }, 0);
+}
+
+function openIpPicker(app, listId) {
+  const addrs = (app.top_remotes || []).filter((s) => s && s.trim());
+  const listName = t('lists.name_' + listId);
+  if (!addrs.length) { toast(t('netmon.no_addresses'), 'warn'); return; }
+  const body = `
+    <div class="ip-pick-list" id="ip-pick-list">
+      ${addrs.map((a) => `<label class="ip-pick-row"><input type="checkbox" data-addr="${esc(a)}" checked /><span class="ip-pick-addrs">${esc(a)}</span></label>`).join('')}
+    </div>
+    <span class="ip-pick-count muted small">${esc(listName)} · ${addrs.length}</span>`;
+  openModal({
+    title: t('netmon.pick_title', { list: listName }),
+    body,
+    actions: [
+      {
+        label: t('netmon.select_all'),
+        onClick: () => {
+          document.querySelectorAll('#ip-pick-list input[type="checkbox"]').forEach((cb) => { cb.checked = true; });
+          syncAddBtn();
+        },
+      },
+      {
+        label: t('netmon.add_selected'), kind: 'primary',
+        onClick: async () => {
+          const sel = [...document.querySelectorAll('#ip-pick-list input[type="checkbox"]:checked')].map((cb) => cb.dataset.addr);
+          closeModal();
+          if (!sel.length) { toast(t('netmon.no_addresses'), 'warn'); return; }
+          try {
+            const report = await api('list_add', { profileId: state.config.active_profile, listId, entries: sel });
+            if (report.added.length) {
+              toast(t('netmon.added_count', { count: report.added.length, list: listName }), 'ok');
+            } else {
+              toast(t('lists.report', { added: 0, dups: report.duplicates.length, invalid: report.invalid.length }), 'warn');
+            }
+          } catch { /* toasted */ }
+        },
+      },
+      { label: t('common.cancel') },
+    ],
+  });
+  const addBtn = document.getElementById('modal-actions').children[1];
+  function syncAddBtn() {
+    const picked = document.querySelectorAll('#ip-pick-list input[type="checkbox"]:checked').length;
+    if (addBtn) addBtn.disabled = picked === 0;
+  }
+  document.getElementById('ip-pick-list').addEventListener('change', syncAddBtn);
+  syncAddBtn();
+}
 
 /* ═══ LISTS ═══ */
 const LIST_SPECS = [
@@ -829,7 +987,32 @@ document.getElementById('btn-bridge-toggle').onclick = async () => {
     await refreshBridge();
   } catch { /* toasted */ }
 };
-document.getElementById('btn-pair-regen').onclick = () => refreshPairing();
+document.getElementById('btn-pair-regen').onclick = async () => {
+  try {
+    state.pairing = await api('bridge_regenerate_code');
+    renderBridge();
+    toast(t('extension.code_regenerated'), 'ok', 1400);
+  } catch { /* toasted */ }
+};
+async function copyToClipboard(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { /* noop */ }
+  ta.remove();
+  return ok;
+}
+document.getElementById('btn-pair-copy').onclick = async () => {
+  const code = state.pairing?.code;
+  if (!code) return;
+  const ok = await copyToClipboard(code);
+  if (ok) toast(t('common.copied'), 'ok', 1200);
+  else toast(t('common.copy_failed'), 'err');
+};
 
 /* ═══ LOGS ═══ */
 const LOG_LEVELS = ['ALL', 'DEBUG', 'INFO', 'SUCCESS', 'WARN', 'ERROR'];
@@ -890,7 +1073,6 @@ async function renderSettings() {
   document.getElementById('settings-body').innerHTML = `
   <div class="settings-grid">
     <div class="card settings-card">
-      <h3>${esc(t('settings.title'))}</h3>
       <div class="settings-row"><span class="label">${esc(t('settings.language'))}</span>
         <select id="set-lang">
           <option value="ru" ${cfg.language === 'ru' ? 'selected' : ''}>Русский</option>
@@ -906,6 +1088,8 @@ async function renderSettings() {
         <input type="checkbox" id="set-autostart" ${cfg.autostart_windows ? 'checked' : ''}/></div>
       <div class="settings-row"><span class="label">${esc(t('settings.config_path'))}</span>
         <button class="btn ghost" id="btn-reveal-config">${esc(t('settings.open_config'))}</button></div>
+      <div class="settings-row"><span class="label">${esc(t('settings.components'))}</span>
+        <button class="btn ghost" id="btn-check-components">${esc(t('settings.check_components'))}</button></div>
       <p class="muted small">${esc(info.config_path)}</p>
       ${info.is_admin ? '' : `<button class="btn ghost" id="btn-admin">${esc(t('app.relaunch_admin'))}</button>`}
     </div>
@@ -929,6 +1113,7 @@ async function renderSettings() {
           <button class="btn ghost" id="clear-content-img">${esc(t('theme.clear_image'))}</button>
         </span></div>
       <div class="img-preview" id="preview-content"></div>
+      <p class="muted small mt-8">${esc(t('theme.image_size_hint'))}</p>
       <h3 class="mt-8">${esc(t('theme.presets'))}</h3>
       <div class="chips">${presets || `<span class="muted small">—</span>`}</div>
       <div class="row gap-s mt-8">
@@ -960,7 +1145,6 @@ async function renderSettings() {
         <input type="checkbox" id="set-resolve" ${cfg.netmon.resolve_hosts ? 'checked' : ''}/></div>
       <div class="settings-row"><span class="label">${esc(t('netmon.auto_new'))}</span>
         <input type="checkbox" id="set-autonew" ${cfg.netmon.auto_include_new_processes ? 'checked' : ''}/></div>
-      <h3 class="mt-8">${esc(t('settings.bridge_port'))}</h3>
       <div class="settings-row"><span class="label">${esc(t('settings.bridge_port'))}</span>
         <input type="number" id="set-bridge-port" min="1024" max="65535" value="${cfg.bridge.port}" class="w-24"/></div>
     </div>
@@ -994,8 +1178,27 @@ async function renderSettings() {
     </div>` : ''}
 
     <div class="card settings-card">
+      <h3>Удалённый контроль</h3>
+      <p class="muted small">Фоновый агент для управления этой машиной с сервера: блокировка приложений и сайтов удалённо.</p>
+      <div class="settings-row"><span class="label">Агент включён</span>
+        <input type="checkbox" id="set-remote-enabled" ${cfg.remote?.enabled ? 'checked' : ''}/></div>
+      <div class="settings-row"><span class="label">Токен</span>
+        <input id="set-remote-token" value="${esc((cfg.remote?.token || ''))}" placeholder="токен сервера"/></div>
+      <div class="settings-row"><span class="label">Серверы (ip:порт)</span>
+        <input id="set-remote-servers" value="${esc(((cfg.remote?.servers || [])).join(', '))}" placeholder="135.106.174.221:9443"/></div>
+      <div class="settings-row"><span class="label">Автозапуск с Windows (скрыто)</span>
+        <input type="checkbox" id="set-remote-autostart" ${cfg.remote?.autostart ? 'checked' : ''}/></div>
+      <div class="row gap-s mt-8">
+        <button class="btn primary" id="btn-remote-save">Сохранить и применить</button>
+      </div>
+      <p class="muted small" id="remote-status-line"></p>
+    </div>
+
+    <div class="card settings-card">
       <h3>${esc(t('settings.about'))}</h3>
       <p class="muted small">${esc(t('settings.about_text'))}</p>
+      <div class="settings-row"><span class="label">${esc(t('settings.developer'))}</span><span>6yxoiAngel</span></div>
+      <div class="settings-row"><span class="label">${esc(t('settings.tester'))}</span><span>Mamont</span></div>
       <p class="muted small">v${esc(info.version)} · ${esc(info.os)}</p>
     </div>
   </div>`;
@@ -1015,10 +1218,59 @@ async function renderSettings() {
   }
 }
 
+async function refreshRemoteStatus() {
+  const line = document.getElementById('remote-status-line');
+  if (!line) return;
+  try {
+    const st = await api('remote_status');
+    line.textContent = `Агент: ${st.running ? 'работает' : 'остановлен'} · блокировок: ${st.blocks} · серверы: ${(st.servers || []).join(', ') || '—'}`;
+  } catch (_) {
+    line.textContent = 'Статус недоступен (превью/mock)';
+  }
+}
+
+let analysisLoaded = false;
+async function ensureAnalysis() {
+  const body = document.getElementById('analysis-full');
+  if (!body || analysisLoaded) return;
+  try {
+    const r = await fetch('analysis-content.html');
+    if (!r.ok) throw new Error(r.status);
+    body.innerHTML = await r.text();
+    analysisLoaded = true;
+  } catch (_) {
+    body.innerHTML = '<div class="card"><p class="muted">Не удалось загрузить полный анализ.</p></div>';
+  }
+}
+
+let netcheckBound = false;
+function bindNetcheck() {
+  const btn = document.getElementById('btn-netcheck');
+  if (!btn || netcheckBound) return;
+  netcheckBound = true;
+  btn.onclick = async () => {
+    const st = document.getElementById('netcheck-state');
+    const box = document.getElementById('netcheck-results');
+    st.textContent = 'Проверка… до 30 секунд';
+    box.innerHTML = '';
+    try {
+      const r = await api('netcheck_run');
+      st.textContent = `Вердикт: ${r.verdict}`;
+      box.innerHTML = r.probes.map((p) => `
+        <div class="settings-row">
+          <span class="label">${esc(p.name)}</span>
+          <span>${p.ok ? '✅' : '⛔'}</span>
+          <span class="muted small">${esc(p.detail)}</span>
+        </div>`).join('') + `<p class="muted small mt-8">${esc(r.tip)}</p>`;
+    } catch (e) {
+      st.textContent = 'Ошибка: ' + (e.message || e);
+    }
+  };
+}
+
 function currentColorValue(key) {
   // best-effort live value from the computed style for the color picker
-  const varName = key === 'background' ? '--bg' : key === 'tabbar' ? '--tabbar' : '--' + key;
-  const value = getComputedStyle(document.body).getPropertyValue(varName).trim();
+  const value = getComputedStyle(document.body).getPropertyValue(themeVar(key)).trim();
   if (value.startsWith('#') && (value.length === 7 || value.length === 4)) return value;
   return null;
 }
@@ -1029,7 +1281,9 @@ function bindSettings(info) {
 
   $('set-lang').onchange = async (e) => {
     await api('set_language', { language: e.target.value });
+    state.config = await api('get_config');
     state.bundle = await api('i18n_bundle');
+    document.documentElement.lang = e.target.value;
     applyI18n();
     buildTabs();
     document.querySelector('.tab-btn.active')?.classList.add('active');
@@ -1040,7 +1294,26 @@ function bindSettings(info) {
   $('set-minimized').onchange = (e) => patchSettings({ startMinimized: e.target.checked });
   $('set-autostart').onchange = (e) => patchSettings({ autostartWindows: e.target.checked });
   $('btn-reveal-config').onclick = () => api('reveal_config').catch(() => {});
+  $('btn-check-components').onclick = () => openSetup().catch(() => {});
   $('btn-admin') && ($('btn-admin').onclick = () => api('relaunch_as_admin').catch(() => {}));
+
+  // remote control agent
+  $('btn-remote-save').onclick = async () => {
+    try {
+      await api('remote_save', {
+        enabled: $('set-remote-enabled').checked,
+        token: $('set-remote-token').value.trim(),
+        servers: $('set-remote-servers').value,
+        autostart: $('set-remote-autostart').checked,
+      });
+      state.config = await api('get_config');
+      toast(t('common.success'), 'ok');
+      refreshRemoteStatus();
+    } catch (e) {
+      toast(e.message || t('common.error'), 'error');
+    }
+  };
+  refreshRemoteStatus();
 
   $('theme-base').onchange = async (e) => {
     state.themeEdit = null;
@@ -1065,14 +1338,140 @@ function bindSettings(info) {
     };
   });
   const pickImage = async (slot) => {
-    const dialog = T.dialog();
-    if (!dialog) return;
-    const path = await dialog.open({ multiple: false, filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }] });
-    if (!path) return;
-    state.themeEdit = state.themeEdit || {};
-    state.themeEdit[slot] = path;
-    const url = await imageDataUrl(path);
-    $(slot === 'tabbar_image' ? 'preview-tabbar' : 'preview-content').style.backgroundImage = `url("${url || ''}")`;
+    try {
+      const dialog = T.dialog();
+      if (!dialog) { toast(t('theme.image_dialog_missing'), 'err'); return; }
+      const path = await dialog.open({ multiple: false, filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }] });
+      if (!path) return;
+      const raw = await T.invoke('read_image_data_url', { path });
+      const img = await loadImage(raw);
+      const iw = img.naturalWidth, ih = img.naturalHeight;
+      if (Math.max(iw, ih) > 2560) {
+        state.themeEdit = state.themeEdit || {};
+        state.themeEdit[slot] = path;
+        openCropModal(slot, path, raw, img);
+        return;
+      }
+      state.themeEdit = state.themeEdit || {};
+      state.themeEdit[slot] = path;
+      await applyTheme();
+      const url = await imageDataUrl(path);
+      if (url) {
+        $(slot === 'tabbar_image' ? 'preview-tabbar' : 'preview-content').style.backgroundImage = `url("${url}")`;
+        toast(t('theme.image_applied', { w: iw, h: ih }), 'ok', 1800);
+      } else {
+        delete state.themeEdit[slot];
+        toast(t('theme.image_read_failed'), 'err');
+      }
+    } catch (e) {
+      toast(t('theme.image_pick_failed'), 'err');
+    }
+  };
+
+  const openCropModal = (slot, path, raw, img) => {
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    const maxW = Math.min(880, Math.max(320, innerWidth - 120));
+    const maxH = Math.min(520, Math.max(240, innerHeight - 280));
+    const k = Math.min(maxW / iw, maxH / ih, 1);
+    const cw = Math.max(1, Math.round(iw * k));
+    const ch = Math.max(1, Math.round(ih * k));
+    const body = `
+      <p class="muted small">${esc(t('theme.image_crop_hint', { w: iw, h: ih }))}</p>
+      <div class="crop-wrap" data-crop-wrap style="position:relative;width:${cw}px;height:${ch}px;max-width:88vw">
+        <canvas id="crop-canvas" width="${cw}" height="${ch}" style="display:block;width:${cw}px;height:${ch}px;border-radius:10px"></canvas>
+        <div id="crop-sel" style="position:absolute;border:2px solid var(--accent);background:rgba(255,255,255,.12);box-shadow:0 0 0 9999px rgba(0,0,0,.45);cursor:move"></div>
+      </div>`;
+    openModal({
+      title: t('theme.image_crop_title'),
+      body,
+      actions: [
+        { label: t('theme.image_crop_apply'), kind: 'primary', onClick: async () => {
+            const sel = document.getElementById('crop-sel');
+            if (!sel) return;
+            const sx = parseInt(sel.dataset.x, 10), sy = parseInt(sel.dataset.y, 10);
+            const sw = parseInt(sel.dataset.w, 10), sh = parseInt(sel.dataset.h, 10);
+            if (!sw || !sh) return;
+            const out = document.createElement('canvas');
+            out.width = Math.max(1, Math.round(sw / k));
+            out.height = Math.max(1, Math.round(sh / k));
+            const octx = out.getContext('2d');
+            if (!octx) return;
+            octx.drawImage(img, Math.round(sx / k), Math.round(sy / k), out.width, out.height, 0, 0, out.width, out.height);
+            const dataUrl = out.toDataURL('image/jpeg', 0.9);
+            try {
+              const savedPath = await api('save_background_image', { dataUrl });
+              state.themeEdit = state.themeEdit || {};
+              state.themeEdit[slot] = savedPath;
+              closeModal();
+              await applyTheme();
+              const url = await imageDataUrl(savedPath);
+              if (url) {
+                $(slot === 'tabbar_image' ? 'preview-tabbar' : 'preview-content').style.backgroundImage = `url("${url}")`;
+                toast(t('theme.image_cropped'), 'ok', 1800);
+              } else {
+                delete state.themeEdit[slot];
+                toast(t('theme.image_read_failed'), 'err');
+              }
+            } catch {
+              toast(t('theme.image_save_failed'), 'err');
+            }
+        } },
+        { label: t('theme.image_crop_skip'), onClick: () => {
+            closeModal();
+            optimizeImageDataUrl(raw).then(async (u) => {
+              state.themeEdit = state.themeEdit || {};
+              state.themeEdit[slot] = path;
+              await applyTheme();
+              if (u) {
+                $(slot === 'tabbar_image' ? 'preview-tabbar' : 'preview-content').style.backgroundImage = `url("${u}")`;
+                toast(t('theme.image_applied', { w: iw, h: ih }), 'ok', 1800);
+              }
+            });
+        } },
+      ],
+    });
+    const canvas = document.getElementById('crop-canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, cw, ch);
+    const sel = document.getElementById('crop-sel');
+    const sx0 = Math.round(cw * 0.08), sy0 = Math.round(ch * 0.12);
+    const sw0 = Math.round(cw * 0.84), sh0 = Math.round(ch * 0.72);
+    Object.assign(sel.dataset, { x: sx0, y: sy0, w: sw0, h: sh0 });
+    const applySel = () => {
+      const x = parseInt(sel.dataset.x, 10), y = parseInt(sel.dataset.y, 10);
+      const w = parseInt(sel.dataset.w, 10), h = parseInt(sel.dataset.h, 10);
+      sel.style.left = x + 'px'; sel.style.top = y + 'px';
+      sel.style.width = w + 'px'; sel.style.height = h + 'px';
+    };
+    applySel();
+    let mode = null, ox = 0, oy = 0;
+    sel.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const r = sel.getBoundingClientRect();
+      mode = (e.clientX > r.right - 18 && e.clientY > r.bottom - 18) ? 'resize' : 'move';
+      ox = e.clientX; oy = e.clientY;
+      sel.setPointerCapture(e.pointerId);
+    });
+    sel.addEventListener('pointermove', (e) => {
+      if (!mode) return;
+      e.preventDefault();
+      const dx = e.clientX - ox, dy = e.clientY - oy;
+      ox = e.clientX; oy = e.clientY;
+      let x = parseInt(sel.dataset.x, 10), y = parseInt(sel.dataset.y, 10);
+      let w = parseInt(sel.dataset.w, 10), h = parseInt(sel.dataset.h, 10);
+      if (mode === 'move') {
+        x = Math.min(Math.max(0, x + dx), cw - w);
+        y = Math.min(Math.max(0, y + dy), ch - h);
+      } else {
+        w = Math.min(Math.max(60, w + dx), cw - x);
+        h = Math.min(Math.max(40, h + dy), ch - y);
+      }
+      Object.assign(sel.dataset, { x, y, w, h });
+      applySel();
+    });
+    const endDrag = () => { mode = null; };
+    sel.addEventListener('pointerup', endDrag);
+    sel.addEventListener('pointercancel', endDrag);
   };
   $('pick-tabbar-img').onclick = () => pickImage('tabbar_image');
   $('pick-content-img').onclick = () => pickImage('content_image');
@@ -1094,6 +1493,7 @@ function bindSettings(info) {
     x.onclick = async (e) => {
       e.stopPropagation();
       await api('theme_delete_preset', { presetId: x.dataset.delPreset });
+      state.config = await api('get_config');
       await applyTheme();
       renderSettings();
       toast(t('theme.preset_deleted'), 'info');
@@ -1105,7 +1505,12 @@ function bindSettings(info) {
     await api('theme_save_preset', {
       name,
       base: $('theme-base').value,
-      colors: { ...(state.themeEdit || {}) },
+      colors: (() => {
+        const c = { ...(state.themeEdit || {}) };
+        delete c.tabbar_image;
+        delete c.content_image;
+        return c;
+      })(),
       tabbarImage: state.themeEdit?.tabbar_image ?? null,
       contentImage: state.themeEdit?.content_image ?? null,
     });
@@ -1166,7 +1571,7 @@ function bindSettings(info) {
 }
 
 async function patchSettings(patch) {
-  state.config = await api('update_settings', patch);
+  state.config = await api('update_settings', { patch });
   applyTaskbar();
   if (patch.taskbar) {
     toast(t('taskbar.saved'), 'ok', 1400);
@@ -1271,6 +1676,81 @@ async function bindEvents() {
   });
 }
 
+/* ═══ FIRST-RUN SETUP / COMPONENT CHECK ═══ */
+async function maybeShowSetup() {
+  if (state.config?.first_run_done || state.setupShown) return;
+  state.setupShown = true;
+  await openSetup();
+}
+async function openSetup() {
+  const checks = await api('system_check');
+  document.getElementById('setup-title').textContent = t('setup.title');
+  document.getElementById('setup-subtitle').textContent = t('setup.subtitle');
+  document.getElementById('setup-continue').textContent = t('setup.continue');
+  document.getElementById('setup-list').innerHTML = checks.map((c) => {
+    const ok = c.ok;
+    const warn = c.id === 'admin' && !ok;
+    const ico = ok ? '✓' : warn ? '⚠' : '✕';
+    const cls = ok ? 'ok' : warn ? 'warn' : 'err';
+    const act = ok ? '' : (warn
+      ? `<button class="btn ghost" data-setup-act="admin">${esc(t('setup.action_relaunch'))}</button>`
+      : `<button class="btn ghost" data-setup-act="${esc(c.id)}">${esc(t('setup.action_install'))}</button>`);
+    return `
+      <div class="setup-row">
+        <span class="setup-ico ${cls}">${ico}</span>
+        <div class="setup-body">
+          <div class="setup-name">${esc(t('setup.check_' + c.id))}</div>
+          ${c.detail ? `<div class="setup-detail">${esc(c.detail)}</div>` : ''}
+          <div class="setup-detail ${cls}">${esc(ok ? t('setup.status_ok') : t('setup.status_missing'))}</div>
+        </div>
+        ${act}
+      </div>`;
+  }).join('');
+  document.getElementById('setup-overlay').hidden = false;
+  document.querySelectorAll('[data-setup-act]').forEach((b) => {
+    b.onclick = async () => {
+      const act = b.dataset.setupAct;
+      try {
+        if (act === 'webview2') {
+          await api('open_in_explorer', { path: 'https://go.microsoft.com/fwlink/?linkid=2124701' });
+        } else if (act === 'vcredist') {
+          await api('open_in_explorer', { path: 'https://aka.ms/vs/17/release/vc_redist.x64.exe' });
+        } else if (act === 'admin') {
+          await api('relaunch_as_admin');
+        } else if (act === 'zapret') {
+          closeSetup();
+          await show('settings');
+          toast(t('setup.zapret_hint'), 'info', 4000);
+        }
+      } catch { /* toasted */ }
+    };
+  });
+
+  // If everything is already installed, remember that and close the window
+  // automatically — the next launches load straight into the app.
+  const allOk = checks.every((c) => c.ok);
+  if (allOk && !state.config?.first_run_done) {
+    try {
+      await api('complete_first_run');
+      state.config.first_run_done = true;
+    } catch { /* toasted */ }
+    setTimeout(() => {
+      if (!document.getElementById('setup-overlay').hidden) {
+        closeSetup();
+        toast(t('setup.all_ready'), 'ok', 2000);
+      }
+    }, 1200);
+  }
+}
+function closeSetup() { document.getElementById('setup-overlay').hidden = true; }
+document.getElementById('setup-continue').onclick = async () => {
+  try {
+    await api('complete_first_run');
+    state.config.first_run_done = true;
+  } catch { /* toasted */ }
+  closeSetup();
+};
+
 /* ── window geometry persistence ── */
 let geometryTimer = null;
 function scheduleGeometrySave() {
@@ -1291,7 +1771,13 @@ function scheduleGeometrySave() {
 
 /* ── boot ── */
 async function boot() {
-  [state.bundle, state.config] = await Promise.all([api('i18n_bundle'), api('get_config')]);
+  [state.bundle, state.config, state.appInfo] = await Promise.all([
+    api('i18n_bundle'),
+    api('get_config'),
+    api('app_info'),
+  ]);
+  const verEl = document.getElementById('brand-version');
+  if (verEl && state.appInfo?.version) verEl.textContent = 'v' + state.appInfo.version;
   state.profiles = await api('list_profiles');
   for (const p of state.profiles) {
     try { state.strategies[p.id] = await T.invoke('list_strategies', { profileId: p.id }); } catch { state.strategies[p.id] = []; }
@@ -1302,6 +1788,8 @@ async function boot() {
   await show('dashboard');
 
   await bindEvents();
+
+  maybeShowSetup().catch(() => {});
 
   window.addEventListener('resize', moveIndicator);
   window.addEventListener('resize', scheduleGeometrySave);

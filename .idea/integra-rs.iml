@@ -8,6 +8,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/diag/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/netmon/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/zapret/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/remote/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

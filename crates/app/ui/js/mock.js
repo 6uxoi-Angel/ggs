@@ -6,6 +6,10 @@
 
   const now = () => new Date().toISOString();
   let seq = 0;
+  // Server-side language. `set_language` does NOT mutate the config object
+  // returned by get_config (mirrors the real backend), so the UI must
+  // re-fetch config after a language change.
+  let serverLang = 'ru';
 
   const state = {
     config: {
@@ -60,6 +64,7 @@
       auto_check_zapret: true,
       auto_install_zapret: false,
       auto_update_zapret: false,
+      first_run_done: false,
     },
     lists: {
       'list-general': ['youtube.com', 'discord.com', 'example.com'],
@@ -90,7 +95,7 @@
       try { fn({ payload: { ts: now(), level, source, message } }); } catch (e) { /* noop */ }
     }
   }
-  pushLog('INFO', 'app', 'Integra 3.0.0 starting (mock)');
+  pushLog('INFO', 'app', 'Integra 3.0.0-alpha.2 starting (mock)');
   pushLog('SUCCESS', 'bridge', 'HTTP-мост слушает 127.0.0.1:8765');
   pushLog('DEBUG', 'app::settings', 'config loaded from %APPDATA%/Integra/config.json');
 
@@ -136,23 +141,44 @@
     switch (cmd) {
       case 'i18n_bundle': {
         const data = window.__I18N_DATA__ || {};
-        const index = state.config.language === 'en' ? 1 : 0;
+        const index = serverLang === 'en' ? 1 : 0;
         const out = {};
         for (const [key, pair] of Object.entries(data)) out[key] = pair[index];
         return out;
       }
-      case 'get_config':
-        return state.config;
+      case 'get_config': {
+        // Return a fresh snapshot: the real backend persists the language
+        // server-side, so the UI must re-fetch to see it.
+        return { ...state.config, language: serverLang };
+      }
       case 'set_language':
-        state.config.language = a.language; return null;
+        serverLang = a.language; return null;
       case 'set_theme':
         state.config.theme = a.theme; return null;
-      case 'update_settings':
-        Object.assign(state.config, {}); return state.config;
+      case 'update_settings': {
+        const p = a.patch || {};
+        const cfg = state.config;
+        if (p.start_minimized !== undefined) cfg.start_minimized = p.start_minimized;
+        if (p.close_to_tray !== undefined) cfg.close_to_tray = p.close_to_tray;
+        if (p.autostart_windows !== undefined) cfg.autostart_windows = p.autostart_windows;
+        if (p.autostart_minimized !== undefined) cfg.autostart_minimized = p.autostart_minimized;
+        if (p.log_level !== undefined) cfg.log_level = p.log_level;
+        if (p.bridge_enabled !== undefined) cfg.bridge.enabled = p.bridge_enabled;
+        if (p.bridge_port !== undefined) cfg.bridge.port = p.bridge_port;
+        if (p.netmon_poll_ms !== undefined) cfg.netmon.poll_interval_ms = p.netmon_poll_ms;
+        if (p.netmon_resolve_hosts !== undefined) cfg.netmon.resolve_hosts = p.netmon_resolve_hosts;
+        if (p.netmon_auto_new !== undefined) cfg.netmon.auto_include_new_processes = p.netmon_auto_new;
+        if (p.netmon_max_entries !== undefined) cfg.netmon.max_entries = p.netmon_max_entries;
+        if (p.auto_check_zapret !== undefined) cfg.auto_check_zapret = p.auto_check_zapret;
+        if (p.auto_install_zapret !== undefined) cfg.auto_install_zapret = p.auto_install_zapret;
+        if (p.auto_update_zapret !== undefined) cfg.auto_update_zapret = p.auto_update_zapret;
+        if (p.taskbar) cfg.taskbar = { ...cfg.taskbar, ...p.taskbar };
+        return cfg;
+      }
       case 'save_window_state': return null;
       case 'app_info':
         return {
-          version: '3.0.0-mock', config_path: 'C:/Users/mock/AppData/Roaming/Integra/config.json',
+          version: '3.0.0-alpha.2-mock', config_path: 'C:/Users/mock/AppData/Roaming/Integra/config.json',
           dev_log_path: 'C:/Users/mock/AppData/Local/Integra/logs/dev.log',
           shared_lists_dir: 'C:/Users/mock/AppData/Local/Integra/shared',
           is_admin: false, os: 'windows',
@@ -377,8 +403,29 @@
       case 'theme_delete_preset':
         state.config.theme_presets = state.config.theme_presets.filter((p) => p.id !== a.preset_id);
         return null;
-      case 'read_image_data_url':
-        return 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs><linearGradient id="g"><stop offset="0" stop-color="#f59e0b"/><stop offset="1" stop-color="#1d1712"/></linearGradient></defs><rect width="120" height="80" fill="url(#g)"/></svg>');
+      case 'read_image_data_url': {
+        // Mock: return a LARGE image so crop flow can be exercised.
+        const c = document.createElement('canvas');
+        c.width = 4000; c.height = 3000;
+        const ctx = c.getContext('2d');
+        const g = ctx.createLinearGradient(0, 0, 4000, 3000);
+        g.addColorStop(0, '#3a2a12'); g.addColorStop(1, '#241a08');
+        ctx.fillStyle = g; ctx.fillRect(0, 0, 4000, 3000);
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillRect(500, 400, 300, 300);
+        return c.toDataURL('image/png');
+      }
+      case 'save_background_image':
+        return 'C:/mock/bg.png';
+      case 'system_check':
+        return [
+          { id: 'webview2', ok: true, detail: 'Edge WebView2 155.0.4283.62' },
+          { id: 'vcredist', ok: true, detail: null },
+          { id: 'admin', ok: false, detail: null },
+          { id: 'zapret', ok: true, detail: 'C:/zapret-discord-youtube' },
+        ];
+      case 'complete_first_run':
+        state.config.first_run_done = true; return null;
 
       case 'zapret_check_update':
         return { tag: 'v1.6.2', version: '1.6.2', name: '1.6.2', published_at: '2025-01-01T00:00:00Z', download_url: 'https://example.com/zapret.zip', size: 12345678 };

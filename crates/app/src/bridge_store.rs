@@ -32,7 +32,10 @@ impl BridgeStoreImpl {
         let config = self.config.get();
         match profile {
             Some(id) => config.profiles.into_iter().find(|p| p.id == id),
-            None => config.active_profile(),
+            // `active_profile()` lives on the ConfigStore, not on the AppConfig
+            // snapshot (the struct only has the `active_profile: Option<String>`
+            // field — calling it through the snapshot would hit E0599).
+            None => self.config.active_profile(),
         }
     }
 
@@ -57,8 +60,7 @@ impl BridgeStoreImpl {
 
 impl BridgeStore for BridgeStoreImpl {
     fn status(&self) -> Value {
-        let config = self.config.get();
-        let active = config.active_profile();
+        let active = self.config.active_profile();
         let mut running = false;
         let mut strategy = Value::Null;
         let mut profile_name = Value::Null;
@@ -114,8 +116,20 @@ impl BridgeStore for BridgeStoreImpl {
             "exclude" => "list-exclude",
             other => return Err(integra_core::i18n::tr("bridge.bad_mode").replace("bypass или exclude", other)),
         };
-        self.with_root(profile, |lists| lists.add(list_id, domains).map_err(|e| e.to_string()))
-            .map_err(|e| e)?
+        let report = self
+            .with_root(profile, |lists| lists.add(list_id, domains).map_err(|e| e.to_string()))
+            .map_err(|e| e)??;
+        Ok(json!({
+            "mode": mode,
+            "changed": report.changed(),
+            "added": report.added,
+            "duplicates": report.duplicates,
+            "invalid": report
+                .invalid
+                .into_iter()
+                .map(|i| json!({"value": i.value, "error": i.error}))
+                .collect::<Vec<_>>(),
+        }))
     }
 
     fn remove_domain(&self, profile: Option<&str>, domain: &str) -> Result<Vec<String>, String> {

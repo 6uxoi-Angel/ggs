@@ -1782,7 +1782,7 @@ dependencies = [
 
 [[package]]
 name = "integra-app"
-version = "3.0.0-alpha.1"
+version = "3.0.0-alpha.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1790,6 +1790,7 @@ dependencies = [
  "integra-core",
  "integra-diag",
  "integra-netmon",
+ "integra-remote",
  "integra-zapret",
  "parking_lot",
  "serde",
@@ -1803,7 +1804,7 @@ dependencies = [
 
 [[package]]
 name = "integra-bridge"
-version = "3.0.0-alpha.1"
+version = "3.0.0-alpha.2"
 dependencies = [
  "integra-core",
  "parking_lot",
@@ -1817,7 +1818,7 @@ dependencies = [
 
 [[package]]
 name = "integra-core"
-version = "3.0.0-alpha.1"
+version = "3.0.0-alpha.2"
 dependencies = [
  "chrono",
  "idna",
@@ -1831,7 +1832,7 @@ dependencies = [
 
 [[package]]
 name = "integra-diag"
-version = "3.0.0-alpha.1"
+version = "3.0.0-alpha.2"
 dependencies = [
  "integra-core",
  "parking_lot",
@@ -1844,7 +1845,7 @@ dependencies = [
 
 [[package]]
 name = "integra-netmon"
-version = "3.0.0-alpha.1"
+version = "3.0.0-alpha.2"
 dependencies = [
  "chrono",
  "dns-lookup",
@@ -1856,8 +1857,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "integra-remote"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ureq",
+ "uuid",
+]
+
+[[package]]
 name = "integra-zapret"
-version = "3.0.0-alpha.1"
+version = "3.0.0-alpha.2"
 dependencies = [
  "chrono",
  "encoding_rs",

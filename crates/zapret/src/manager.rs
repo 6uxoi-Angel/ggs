@@ -36,7 +36,6 @@ pub enum ManagerEvent {
 struct Runtime {
     launcher: Child,
     bat: PathBuf,
-    log: PathBuf,
     strategy: String,
     winws_pid: Option<u32>,
 }
@@ -182,7 +181,6 @@ impl ZapretManager {
             *runtime_guard = Some(Runtime {
                 launcher,
                 bat: runtime_bat,
-                log: log_path.clone(),
                 strategy: strategy_name.clone(),
                 winws_pid: None,
             });

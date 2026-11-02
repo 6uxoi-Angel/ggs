@@ -3,6 +3,8 @@
 
 mod benchmark;
 mod bridge_store;
+mod netcheck;
+mod remote_ctrl;
 mod win;
 
 use std::collections::HashMap;
@@ -85,7 +87,6 @@ struct ProfileView {
 }
 
 /// Global application state shared with every command.
-#[derive(Clone)]
 pub struct AppState {
     pub config: Arc<ConfigStore>,
     pub logs: Arc<LogBuffer>,
@@ -95,6 +96,24 @@ pub struct AppState {
     pub netmon: Arc<Netmon>,
     pub bridge: Arc<BridgeServer>,
     pub benchmark: Mutex<Option<Arc<benchmark::Benchmark>>>,
+    pub remote: Arc<remote_ctrl::RemoteCtrl>,
+}
+
+// parking_lot::Mutex is not `Clone`, so clone every inner value explicitly.
+impl Clone for AppState {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            logs: self.logs.clone(),
+            lists: self.lists.clone(),
+            managers: self.managers.clone(),
+            managers_tx: self.managers_tx.clone(),
+            netmon: self.netmon.clone(),
+            bridge: self.bridge.clone(),
+            benchmark: Mutex::new(self.benchmark.lock().clone()),
+            remote: self.remote.clone(),
+        }
+    }
 }
 
 impl AppState {
@@ -197,7 +216,10 @@ async fn get_config(state: tauri::State<'_, AppState>) -> Result<AppConfig, Comm
 #[tauri::command]
 async fn set_language(state: tauri::State<'_, AppState>, language: String) -> Result<(), CommandError> {
     integra_core::i18n::set_language(&language);
-    state.config.update(|c| c.language = language).map_err(|e| CommandError::raw(e.to_string()))?;
+    state
+        .config
+        .update(|c| c.language = language.clone())
+        .map_err(|e| CommandError::raw(e.to_string()))?;
     state.log_debug("app::settings", format!("language → {language}"));
     Ok(())
 }
@@ -272,6 +294,89 @@ async fn update_settings(state: tauri::State<'_, AppState>, patch: SettingsPatch
     Ok(state.config.get())
 }
 
+// ── remote control (agent) ──────────────────────────────────────────
+
+#[tauri::command]
+async fn netcheck_run() -> Result<netcheck::NetcheckReport, CommandError> {
+    tauri::async_runtime::spawn_blocking(netcheck::run)
+        .await
+        .map_err(|e| CommandError::raw(format!("netcheck: {e}")))
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+pub struct RemoteSaveReq {
+    pub enabled: bool,
+    pub token: String,
+    pub servers: String,
+    pub autostart: bool,
+}
+
+impl Default for RemoteSaveReq {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            token: String::new(),
+            servers: String::new(),
+            autostart: false,
+        }
+    }
+}
+
+#[tauri::command]
+fn remote_status(state: tauri::State<'_, AppState>) -> Result<Value, CommandError> {
+    let cfg = state.config.get().remote;
+    let blocks = integra_remote::state::State::load(integra_remote::DEFAULT_PROG_DIR).blocks.len();
+    Ok(json!({
+        "running": state.remote.is_running(),
+        "enabled": cfg.enabled,
+        "token_set": !cfg.token.is_empty(),
+        "servers": cfg.servers,
+        "autostart": cfg.autostart,
+        "blocks": blocks,
+    }))
+}
+
+#[tauri::command]
+async fn remote_save(state: tauri::State<'_, AppState>, req: RemoteSaveReq) -> Result<Value, CommandError> {
+    let servers: Vec<String> = req
+        .servers
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    state
+        .config
+        .update(|c| {
+            c.remote.enabled = req.enabled;
+            c.remote.token = req.token.clone();
+            c.remote.servers = servers.clone();
+            c.remote.autostart = req.autostart;
+        })
+        .map_err(|e| CommandError::raw(e.to_string()))?;
+
+    if req.autostart {
+        let exe = std::env::current_exe().map_err(|e| CommandError::raw(e.to_string()))?;
+        match integra_remote::schedule_autostart(&exe.to_string_lossy()) {
+            Ok(m) => state.log(LogLevel::Info, "remote", m),
+            Err(e) => state.log(LogLevel::Warn, "remote", format!("autostart: {e}")),
+        }
+    } else {
+        let _ = integra_remote::remove_autostart();
+    }
+
+    if req.enabled && !req.token.is_empty() && !servers.is_empty() {
+        if !state.remote.start(servers, req.token) {
+            return Err(CommandError::raw("не удалось запустить агент"));
+        }
+    } else if !req.enabled {
+        state.remote.stop();
+    }
+
+    Ok(json!({"ok": true}))
+}
+
 #[tauri::command]
 async fn save_window_state(
     state: tauri::State<'_, AppState>,
@@ -305,6 +410,71 @@ async fn app_info(state: tauri::State<'_, AppState>) -> Result<Value, CommandErr
         "is_admin": win::is_admin(),
         "os": std::env::consts::OS,
     }))
+}
+
+// ── first-run component check ──────────────────────────────────────
+
+#[derive(Serialize)]
+struct ComponentStatus {
+    id: String,
+    ok: bool,
+    detail: Option<String>,
+}
+
+/// Is a WebView2 runtime installed (version folder under EdgeWebView)?
+fn webview2_present() -> bool {
+    for base in [
+        r"C:\Program Files (x86)\Microsoft\EdgeWebView\Application",
+        r"C:\Program Files\Microsoft\EdgeWebView\Application",
+    ] {
+        let p = Path::new(base);
+        if p.is_dir() {
+            if let Ok(rd) = std::fs::read_dir(p) {
+                if rd.filter_map(|e| e.ok()).any(|e| e.path().is_dir()) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check every component Integra needs; a missing item gets an action in UI.
+#[tauri::command]
+fn system_check(state: tauri::State<'_, AppState>) -> Result<Vec<ComponentStatus>, CommandError> {
+    let mut out = Vec::new();
+    out.push(ComponentStatus {
+        id: "webview2".into(),
+        ok: webview2_present(),
+        detail: None,
+    });
+    out.push(ComponentStatus {
+        id: "vcredist".into(),
+        ok: Path::new(r"C:\Windows\System32\VCRUNTIME140.dll").exists(),
+        detail: None,
+    });
+    let admin = win::is_admin();
+    out.push(ComponentStatus {
+        id: "admin".into(),
+        ok: admin,
+        detail: None,
+    });
+    let profiles = state.config.get().profiles;
+    out.push(ComponentStatus {
+        id: "zapret".into(),
+        ok: !profiles.is_empty(),
+        detail: profiles.first().map(|p| p.path.to_string_lossy().into_owned()),
+    });
+    Ok(out)
+}
+
+/// Mark the first-run check as acknowledged (stored in config).
+#[tauri::command]
+fn complete_first_run(state: tauri::State<'_, AppState>) -> Result<(), CommandError> {
+    state
+        .config
+        .update(|c| c.first_run_done = true)
+        .map_err(|e| CommandError::raw(e.to_string()))
 }
 
 #[tauri::command]
@@ -435,7 +605,7 @@ async fn start_profile(
     let profile = state.profile(&profile_id)?;
     let manager = state.ensure_manager(&profile_id)?;
     let strategy_file = strategy.unwrap_or_else(|| profile.selected_strategy.clone());
-    let pid = manager.start(&strategy_file).map_err(From::from)?;
+    let pid = manager.start(&strategy_file).map_err(CommandError::from)?;
     state
         .config
         .update(|c| {
@@ -450,7 +620,7 @@ async fn start_profile(
 #[tauri::command]
 async fn stop_profile(state: tauri::State<'_, AppState>, profile_id: String) -> Result<u32, CommandError> {
     let manager = state.ensure_manager(&profile_id)?;
-    Ok(manager.stop().map_err(From::from)?)
+    Ok(manager.stop().map_err(CommandError::from)?)
 }
 
 #[tauri::command]
@@ -466,13 +636,13 @@ async fn install_service(
     strategy: String,
 ) -> Result<(), CommandError> {
     let manager = state.ensure_manager(&profile_id)?;
-    manager.install_service(&strategy).map_err(From::from)
+    manager.install_service(&strategy).map_err(CommandError::from)
 }
 
 #[tauri::command]
 async fn remove_service(state: tauri::State<'_, AppState>, profile_id: String) -> Result<(), CommandError> {
     let manager = state.ensure_manager(&profile_id)?;
-    manager.remove_service().map_err(From::from)
+    manager.remove_service().map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -882,7 +1052,7 @@ async fn benchmark_status(state: tauri::State<'_, AppState>) -> Result<Value, Co
             "progress": bench.progress(),
             "result": bench.result(),
         })),
-        None => Ok(json!({"running": false, "progress": None, "result": None})),
+        None => Ok(json!({"running": false, "progress": Value::Null, "result": Value::Null})),
     }
 }
 
@@ -1086,11 +1256,36 @@ async fn read_image_data_url(path: String) -> Result<String, CommandError> {
     Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
+/// Persist a cropped/optimized background image (data URL) into the app data
+/// dir and return the stored path (used as a preset background reference).
+#[tauri::command]
+async fn save_background_image(app: tauri::AppHandle, data_url: String) -> Result<String, CommandError> {
+    let (_, b64) = data_url
+        .split_once(',')
+        .ok_or_else(|| CommandError::raw("bad data url"))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| CommandError::raw(e.to_string()))?;
+    if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
+        return Err(CommandError::raw("bad image size"));
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| CommandError::raw(e.to_string()))?
+        .join("bg");
+    std::fs::create_dir_all(&dir).map_err(|e| CommandError::raw(e.to_string()))?;
+    let name = format!("bg_{}.png", integra_core::random_hex(4));
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).map_err(|e| CommandError::raw(e.to_string()))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 // ── zapret maintenance ─────────────────────────────────────────────
 
 #[tauri::command]
 async fn zapret_check_update() -> Result<integra_zapret::maintenance::LatestRelease, CommandError> {
-    integra_zapret::maintenance::fetch_latest().map_err(From::from)
+    integra_zapret::maintenance::fetch_latest().map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -1134,10 +1329,10 @@ async fn zapret_install_update(
                     emit(json!({"phase": "download", "percent": percent}));
                 }
             })
-            .map_err(From::from)?;
+            .map_err(CommandError::from)?;
             emit(json!({"phase": "extract"}));
             logs.log(LogLevel::Info, "maint", integra_core::i18n::tr("maint.extracting"));
-            maint::install_release(&zip_path, &profile.path, &version).map_err(From::from)?;
+            maint::install_release(&zip_path, &profile.path, &version).map_err(CommandError::from)?;
             Ok(())
         })();
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -1201,7 +1396,6 @@ fn autostart_profiles(state: Arc<AppState>) {
 pub fn run() {
     let config = Arc::new(ConfigStore::load(None));
     integra_core::i18n::set_language(&config.get().language);
-
     let logs = LogBuffer::new(5000);
     logs.set_min_level(min_level_from_config(&config.get()));
     start_dev_log_writer(logs.clone());
@@ -1228,12 +1422,21 @@ pub fn run() {
         netmon: Netmon::new(),
         bridge,
         benchmark: Mutex::new(None),
+        remote: Arc::new(remote_ctrl::RemoteCtrl::new()),
     });
 
     if config.get().bridge.enabled {
         match state.bridge.start() {
             Ok(port) => logs.log(LogLevel::Success, "bridge", tr_with("bridge.log_started", &[("port", &port.to_string())])),
             Err(err) => logs.log(LogLevel::Warn, "bridge", err),
+        }
+    }
+
+    // Auto-start the remote agent if configured (GUI mode).
+    {
+        let rc = config.get().remote;
+        if rc.enabled && !rc.token.is_empty() && !rc.servers.is_empty() {
+            state.remote.start(rc.servers, rc.token);
         }
     }
 
@@ -1312,10 +1515,22 @@ pub fn run() {
                 tray.build(&handle)?;
             }
 
-            // Window geometry from the config.
+            // Window geometry from the config. The window has a fixed size,
+            // but it is fitted to the current monitor so it fits any screen
+            // (e.g. 1180x760 on FullHD, smaller on 1366x768 laptops).
             {
                 let window_config = state.config.get().window;
                 if let Some(window) = app.get_webview_window("main") {
+                    if let Ok(Some(mon)) = window.current_monitor() {
+                        let scale = mon.scale_factor();
+                        let (mw, mh) = (
+                            mon.size().width as f64 / scale,
+                            mon.size().height as f64 / scale,
+                        );
+                        let w = 1180.0_f64.min(mw * 0.92);
+                        let h = 760.0_f64.min(mh * 0.88);
+                        let _ = window.set_size(tauri::LogicalSize::new(w, h));
+                    }
                     if window_config.maximized {
                         let _ = window.maximize();
                     } else {
@@ -1370,6 +1585,8 @@ pub fn run() {
             save_window_state,
             app_info,
             relaunch_as_admin,
+            system_check,
+            complete_first_run,
             list_profiles,
             add_profile,
             update_profile,
@@ -1408,6 +1625,9 @@ pub fn run() {
             bridge_stop,
             bridge_pairing,
             bridge_regenerate_code,
+            remote_status,
+            remote_save,
+            netcheck_run,
             logs_snapshot,
             logs_clear,
             logs_export,
@@ -1418,6 +1638,7 @@ pub fn run() {
             theme_save_preset,
             theme_delete_preset,
             read_image_data_url,
+            save_background_image,
             zapret_check_update,
             zapret_installed_version,
             zapret_install_update,
@@ -1425,4 +1646,27 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, _event| {});
+}
+
+/// Headless agent mode: no window, used by the "IntegraRemote" scheduled
+/// task (auto-start from the settings page). Returns a process exit code.
+pub fn remote_run_standalone() -> i32 {
+    let cfg = ConfigStore::load(None).get().remote;
+    if cfg.token.is_empty() || cfg.servers.is_empty() {
+        return 2;
+    }
+    // Single-instance guard: never run two agents at once.
+    if std::net::TcpListener::bind(("127.0.0.1", 31732)).is_err() {
+        return 0;
+    }
+    let _ = std::fs::create_dir_all(integra_remote::DEFAULT_PROG_DIR);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    integra_remote::run_agent(integra_remote::AgentCfg {
+        servers: cfg.servers,
+        token: cfg.token,
+        prog_dir: integra_remote::DEFAULT_PROG_DIR.into(),
+        foreground_log: false,
+        stop,
+    });
+    0
 }

@@ -2,10 +2,10 @@
 //! score each one with the diagnostic checks and restore the original state.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 
 use integra_diag::CheckKind;
@@ -138,7 +138,6 @@ pub fn spawn(
             let was_running = manager.status() == Status::Running;
 
             let mut entries: Vec<BenchEntry> = Vec::new();
-            let total = strategies.len() as u32;
             'outer: for (index, strategy) in strategies.iter().enumerate() {
                 let index = index as u32 + 1;
 

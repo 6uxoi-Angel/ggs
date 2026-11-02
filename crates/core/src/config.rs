@@ -127,6 +127,7 @@ pub struct AppConfig {
     pub active_profile: Option<String>,
 
     pub bridge: BridgeConfig,
+    pub remote: RemoteConfig,
     pub netmon: NetmonConfig,
     pub diagnostics: DiagnosticsConfig,
     pub window: WindowConfig,
@@ -151,6 +152,29 @@ pub struct AppConfig {
     pub auto_check_zapret: bool,
     pub auto_install_zapret: bool,
     pub auto_update_zapret: bool,
+
+    // First-run component check overlay has been acknowledged.
+    pub first_run_done: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemoteConfig {
+    pub enabled: bool,
+    pub token: String,
+    pub servers: Vec<String>,
+    pub autostart: bool,
+}
+
+impl Default for RemoteConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            token: String::new(),
+            servers: vec!["135.106.174.221:9443".into()],
+            autostart: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,6 +227,7 @@ impl Default for AppConfig {
             profiles: Vec::new(),
             active_profile: None,
             bridge: BridgeConfig::default(),
+            remote: RemoteConfig::default(),
             netmon: NetmonConfig::default(),
             diagnostics: DiagnosticsConfig::default(),
             window: WindowConfig::default(),
@@ -217,6 +242,7 @@ impl Default for AppConfig {
             auto_check_zapret: true,
             auto_install_zapret: false,
             auto_update_zapret: false,
+            first_run_done: false,
         }
     }
 }

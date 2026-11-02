@@ -26,7 +26,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 pub use collector::Collector;
-pub use tracker::{Netmon, ProcessFilter, TrackerConfig};
+pub use tracker::{Netmon, ProcessFilter, SessionSummary, TrackerConfig};
 
 #[derive(Debug, Error)]
 pub enum NetmonError {

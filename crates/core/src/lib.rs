@@ -21,7 +21,7 @@ pub use config::{AppConfig, ConfigStore, TaskbarConfig, ThemeColors, ThemePreset
 pub use domain::{normalize_host, DomainError};
 pub use lists::{ListsManager, LISTS};
 pub use logbuf::{LogBuffer, LogEntry, LogLevel};
-pub use profile::ZapretProfile;
+pub use profile::{ProfileHealth, ZapretProfile};
 
 /// Application-wide constants.
 pub mod consts {
