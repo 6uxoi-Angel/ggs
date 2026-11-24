@@ -3,7 +3,9 @@
 
 mod benchmark;
 mod bridge_store;
+mod dns;
 mod netcheck;
+mod tgproxy;
 mod win;
 
 use std::collections::HashMap;
@@ -114,6 +116,7 @@ pub struct AppState {
     pub netmon: Arc<Netmon>,
     pub bridge: Arc<BridgeServer>,
     pub benchmark: Mutex<Option<Arc<benchmark::Benchmark>>>,
+    pub tgproxy: Arc<Mutex<tgproxy::TgProxyInner>>,
 }
 
 // parking_lot::Mutex is not `Clone`, so clone every inner value explicitly.
@@ -128,6 +131,7 @@ impl Clone for AppState {
             netmon: self.netmon.clone(),
             bridge: self.bridge.clone(),
             benchmark: Mutex::new(self.benchmark.lock().clone()),
+            tgproxy: self.tgproxy.clone(),
         }
     }
 }
@@ -374,6 +378,12 @@ async fn save_window_state(
     height: u32,
     maximized: bool,
 ) -> Result<(), CommandError> {
+    // Ignore saves while the window is hidden or minimized (Windows then
+    // reports -32000,-32000): a stale off-screen position must never be
+    // persisted, or the next start would restore the window off-screen.
+    if x <= -30000 || y <= -30000 {
+        return Ok(());
+    }
     state
         .config
         .update(|c| {
@@ -746,10 +756,18 @@ async fn list_meta(
 #[tauri::command]
 async fn list_add(
     state: tauri::State<'_, AppState>,
-    profile_id: String,
+    profile_id: Option<String>,
     list_id: String,
     entries: Vec<String>,
 ) -> Result<integra_core::lists::BulkReport, CommandError> {
+    let profile_id = match profile_id {
+        Some(id) => id,
+        None => state
+            .config
+            .get()
+            .active_profile
+            .ok_or_else(|| CommandError::key("lists.no_active_profile"))?,
+    };
     let report = with_list_root(&state, &profile_id, |lists| {
         lists
             .add(&list_id, &entries)
@@ -1484,6 +1502,177 @@ async fn zapret_install_update(
     Ok(())
 }
 
+// ── Roblox DNS manager ─────────────────────────────────────────────
+
+#[tauri::command]
+fn dns_servers() -> Vec<dns::DnsServer> {
+    dns::DNS_SERVERS.to_vec()
+}
+
+#[tauri::command]
+async fn dns_benchmark() -> Result<Vec<dns::BenchResult>, CommandError> {
+    let handle = tauri::async_runtime::spawn_blocking(dns::bench_dns);
+    handle.await.map_err(|e| CommandError::raw(e.to_string()))
+}
+
+#[tauri::command]
+fn dns_status() -> Result<Value, CommandError> {
+    dns::dns_status()
+}
+
+#[tauri::command]
+fn dns_apply(primary: String, secondary: String, use_doh: bool) -> Result<(), CommandError> {
+    dns::dns_apply(&primary, &secondary, use_doh)
+}
+
+#[tauri::command]
+fn dns_reset() -> Result<(), CommandError> {
+    dns::dns_reset()
+}
+
+#[tauri::command]
+async fn roblox_find() -> Result<Vec<dns::HostsCandidate>, CommandError> {
+    let handle = tauri::async_runtime::spawn_blocking(dns::roblox_find);
+    handle.await.map_err(|e| CommandError::raw(e.to_string()))
+}
+
+#[tauri::command]
+fn roblox_hosts_state() -> Result<bool, CommandError> {
+    dns::roblox_hosts_state()
+}
+
+#[tauri::command]
+fn roblox_hosts_apply(ip: String) -> Result<String, CommandError> {
+    dns::roblox_hosts_apply(&ip)
+}
+
+#[tauri::command]
+fn roblox_hosts_revert() -> Result<bool, CommandError> {
+    dns::roblox_hosts_revert()
+}
+
+// ── TG WS Proxy ────────────────────────────────────────────────────
+
+fn tgproxy_log_dir() -> PathBuf {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let p = PathBuf::from(appdata).join("Integra/logs");
+        let _ = std::fs::create_dir_all(&p);
+        return p;
+    }
+    std::env::temp_dir()
+}
+
+#[tauri::command]
+fn tgproxy_status(state: tauri::State<'_, AppState>) -> Result<Value, CommandError> {
+    let cfg = state.config.get();
+    let dir = tgproxy::find_dir(&cfg.tgproxy.path);
+    let mut secret = cfg.tgproxy.secret.clone();
+    if secret.len() != 32 {
+        secret = integra_core::random_hex(16);
+        let s = secret.clone();
+        let _ = state.config.update(move |c| c.tgproxy.secret = s);
+    }
+    {
+        let mut inner = state.tgproxy.lock();
+        if inner.child.is_some() && !inner.is_running() {
+            inner.child = None;
+        }
+    }
+    let running = state.tgproxy.lock().is_running()
+        || tgproxy::port_open(cfg.tgproxy.port);
+    let version = dir
+        .as_ref()
+        .map(|d| tgproxy::read_version(d))
+        .unwrap_or_default();
+    let venv_ok = dir
+        .as_ref()
+        .map(|d| d.join(".venv/Scripts/python.exe").exists())
+        .unwrap_or(false);
+    let link = format!(
+        "tg://proxy?server=127.0.0.1&port={}&secret={}",
+        cfg.tgproxy.port, secret
+    );
+    Ok(json!({
+        "dir": dir.as_ref().map(|d| d.to_string_lossy().into_owned()),
+        "exists": dir.is_some(),
+        "version": version,
+        "venv_ok": venv_ok,
+        "setup_running": state.tgproxy.lock().setup_running,
+        "running": running,
+        "port": cfg.tgproxy.port,
+        "secret": secret,
+        "link": link,
+    }))
+}
+
+#[tauri::command]
+fn tgproxy_set_path(state: tauri::State<'_, AppState>, path: String) -> Result<(), CommandError> {
+    state
+        .config
+        .update(move |c| c.tgproxy.path = path.clone())
+        .map_err(|e| CommandError::raw(e.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn tgproxy_setup(state: tauri::State<'_, AppState>) -> Result<(), CommandError> {
+    let cfg = state.config.get();
+    if state.tgproxy.lock().setup_running {
+        return Err(CommandError::key("tgproxy.setup_running"));
+    }
+    let dir = tgproxy::find_dir(&cfg.tgproxy.path)
+        .ok_or_else(|| CommandError::key("tgproxy.not_found"))?;
+    let shared = state.tgproxy.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = tgproxy::setup_venv(shared.clone(), &dir) {
+            shared.lock().push_log(format!("[integra] {}", e.message));
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn tgproxy_start(
+    state: tauri::State<'_, AppState>,
+    port: Option<u16>,
+    secret: Option<String>,
+) -> Result<(), CommandError> {
+    let mut cfg = state.config.get();
+    let p = port.unwrap_or(cfg.tgproxy.port).clamp(1024, 65535);
+    let s = match secret {
+        Some(s) if s.len() == 32 => s,
+        _ if cfg.tgproxy.secret.len() == 32 => cfg.tgproxy.secret.clone(),
+        _ => {
+            let g = integra_core::random_hex(16);
+            cfg.tgproxy.secret = g.clone();
+            g
+        }
+    };
+    if cfg.tgproxy.port != p || cfg.tgproxy.secret != s {
+        cfg.tgproxy.port = p;
+        cfg.tgproxy.secret = s.clone();
+        let saved = cfg.tgproxy.clone();
+        let _ = state.config.update(move |c| c.tgproxy = saved);
+    }
+    let dir = tgproxy::find_dir(&cfg.tgproxy.path)
+        .ok_or_else(|| CommandError::key("tgproxy.not_found"))?;
+    let shared = state.tgproxy.clone();
+    let log_dir = tgproxy_log_dir();
+    tgproxy::spawn_proxy(shared, &dir, p, &s, &log_dir)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn tgproxy_stop(state: tauri::State<'_, AppState>) -> Result<(), CommandError> {
+    tgproxy::stop_proxy(state.tgproxy.clone());
+    Ok(())
+}
+
+#[tauri::command]
+fn tgproxy_logs(state: tauri::State<'_, AppState>, n: Option<usize>) -> Vec<String> {
+    state.tgproxy.lock().tail(n.unwrap_or(200))
+}
+
 // ── app bootstrap ──────────────────────────────────────────────────
 
 fn show_main_window(app: &tauri::AppHandle) {
@@ -1570,6 +1759,7 @@ pub fn run() {
         netmon: Netmon::new(),
         bridge,
         benchmark: Mutex::new(None),
+        tgproxy: Arc::new(Mutex::new(tgproxy::TgProxyInner::default())),
     });
 
     if config.get().bridge.enabled {
@@ -1654,6 +1844,7 @@ pub fn run() {
                         "quit" => {
                             let state: tauri::State<AppState> = app.state();
                             stop_all_profiles(&state);
+                            tgproxy::stop_proxy(state.tgproxy.clone());
                             app.exit(0);
                         }
                         _ => {}
@@ -1693,8 +1884,26 @@ pub fn run() {
                     if window_config.maximized {
                         let _ = window.maximize();
                     } else {
+                        // Only restore the saved position when it is actually
+                        // on a visible screen; otherwise (the window was
+                        // hidden/minimized when last saved, or the monitor is
+                        // gone) keep the default centered placement.
                         if let (Some(x), Some(y)) = (window_config.x, window_config.y) {
-                            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+                            let on_screen = window
+                                .available_monitors()
+                                .map(|mons| {
+                                    mons.iter().any(|m| {
+                                        let p = m.position();
+                                        let s = m.size();
+                                        (x >= p.x && x < p.x + s.width as i32)
+                                            && (y >= p.y && y < p.y + s.height as i32)
+                                    })
+                                })
+                                .unwrap_or(false);
+                            if on_screen {
+                                let _ = window
+                                    .set_position(tauri::PhysicalPosition::new(x, y));
+                            }
                         }
                     }
                 }
@@ -1785,6 +1994,21 @@ pub fn run() {
             bridge_pairing,
             bridge_regenerate_code,
             netcheck_run,
+            dns_servers,
+            dns_benchmark,
+            dns_status,
+            dns_apply,
+            dns_reset,
+            roblox_find,
+            roblox_hosts_state,
+            roblox_hosts_apply,
+            roblox_hosts_revert,
+            tgproxy_status,
+            tgproxy_set_path,
+            tgproxy_setup,
+            tgproxy_start,
+            tgproxy_stop,
+            tgproxy_logs,
             logs_snapshot,
             logs_clear,
             logs_export,

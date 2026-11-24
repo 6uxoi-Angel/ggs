@@ -534,3 +534,26 @@ select option { background: var(--surface-solid); color: var(--text); }
   .cards-grid { grid-template-columns: 1fr; }
   .settings-grid { grid-template-columns: 1fr; }
 }
+
+/* ── Roblox DNS + TG Proxy pages ── */
+.dns-list { display: flex; flex-direction: column; gap: 6px; }
+.dns-addr { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.dns-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 10px; margin: 4px 0;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: color-mix(in srgb, var(--card) 60%, transparent);
+  cursor: pointer;
+}
+.dns-row.best { border-color: var(--accent); }
+.dns-name { font-weight: 600; min-width: 150px; }
+.dns-metric { font-size: 12px; color: var(--muted-foreground); min-width: 64px; }
+.dns-score { margin-left: auto; font-weight: 700; color: var(--accent); }
+.mono { font-family: Consolas, 'Cascadia Mono', monospace; font-size: 12px; }
+.logs-box {
+  max-height: 260px; overflow-y: auto;
+  background: color-mix(in srgb, var(--background) 80%, #000);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-all;
+}

@@ -133,6 +133,7 @@ pub struct AppConfig {
     pub bridge: BridgeConfig,
     pub netmon: NetmonConfig,
     pub diagnostics: DiagnosticsConfig,
+    pub tgproxy: TgProxyConfig,
     pub window: WindowConfig,
 
     pub start_minimized: bool,
@@ -193,6 +194,29 @@ pub struct CustomSite {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TgProxyConfig {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub secret: String,
+    #[serde(default)]
+    pub auto_start: bool,
+}
+
+impl Default for TgProxyConfig {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            port: 1443,
+            secret: String::new(),
+            auto_start: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WindowConfig {
     pub width: u32,
@@ -213,6 +237,7 @@ impl Default for AppConfig {
             bridge: BridgeConfig::default(),
             netmon: NetmonConfig::default(),
             diagnostics: DiagnosticsConfig::default(),
+            tgproxy: TgProxyConfig::default(),
             window: WindowConfig::default(),
             start_minimized: false,
             autostart_minimized: true,
@@ -498,6 +523,10 @@ fn sanitize(config: &mut AppConfig) {
         config.netmon.max_entries = 5000;
     }
     config.diagnostics.custom_sites.truncate(MAX_CUSTOM_SITES);
+    config.tgproxy.port = config.tgproxy.port.clamp(1024, 65535);
+    if config.tgproxy.secret.len() != 32 {
+        config.tgproxy.secret = random_hex(16);
+    }
 
     match config.taskbar.position.as_str() {
         "top" | "bottom" | "left" | "right" => {}

@@ -171,18 +171,24 @@ pub fn run() -> NetcheckReport {
     let ru_ok = probes[2].ok;
     let freeze_bad = !probes[4].ok;
     let dns_bad = !probes[3].ok;
+    // Windows DNS failure codes (WSAHOST_NOT_FOUND = 11001) seen in the TCP
+    // probes mean the DNS resolver is broken even if raw-IP connects work.
+    let foreign_dns_err = probes[0].detail.contains("11001") || probes[1].detail.contains("11001");
 
-    let (verdict, tip) = if !foreign_ok && !dns_bad {
+    let (verdict, tip) = if !foreign_ok && !ru_ok {
         (
             "NO_INTERNET",
             "Сеть недоступна: проверьте Wi-Fi/кабель, роутер и адаптер.",
         )
     } else if !foreign_ok && ru_ok {
         ("WHITELIST_MODE", "Зарубежные адреса не открываются, а «белые» российские — да. Похоже на режим белого списка (фильтрация по IP/ASN): нужен узел на «белом» IP внутри РФ.")
-    } else if freeze_bad && foreign_ok {
+    } else if dns_bad || foreign_dns_err {
+        (
+            "DNS_FAILURE",
+            "Сбой DNS: резолв имён не работает, хотя TCP по IP проходит. Перейдите на DoH/DoT или пропишите надёжный DNS.",
+        )
+    } else if freeze_bad {
         ("FREEZE_SUSPECTED", "Соединения устанавливаются, но поток замирает после ~16 КБ — сигнатура «заморозки». Лечится цепочкой через РФ-мост/ротацией соединений.")
-    } else if dns_bad && foreign_ok {
-        ("DNS_POISONING_SUSPECTED", "TCP работает, а резолв имён падает — возможно отравление DNS. Перейдите на DoH/DoT или пропишите надёжный DNS.")
     } else {
         (
             "CLEAN",

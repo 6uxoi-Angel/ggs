@@ -14,6 +14,8 @@ const TABS = [
   { id: 'apps', ico: '⇄' },
   { id: 'lists', ico: '☰' },
   { id: 'diagnostics', ico: '◎' },
+  { id: 'dns', ico: '⌖' },
+  { id: 'tgproxy', ico: '⇆' },
   { id: 'analysis', ico: '◈' },
   { id: 'extension', ico: '⧉' },
   { id: 'logs', ico: '≣' },
@@ -63,6 +65,16 @@ const state = {
   themeEdit: null,
   imageCache: {},
   settingsRefreshTimer: null,
+  // dns
+  dnsBench: null,
+  dnsBusy: false,
+  rbxCands: [],
+  rbxBusy: false,
+  // tg proxy
+  tg: null,
+  tgLogs: [],
+  tgPollTimer: null,
+  tgLogTimer: null,
 };
 
 /* ── i18n ── */
@@ -85,7 +97,7 @@ async function api(cmd, args = {}) {
     return await T.invoke(cmd, args);
   } catch (e) {
     const err = typeof e === 'string' ? { message: e } : (e || {});
-    if (err.key === 'zapret.not_admin') offerAdmin();
+    if (err.key === 'zapret.not_admin' || err.key === 'dns.not_admin') offerAdmin();
     else toast(err.message || String(e), 'err');
     throw e;
   }
@@ -301,6 +313,8 @@ async function show(page) {
     case 'apps': await refreshNetmonOnce(); break;
     case 'lists': await refreshLists(); break;
     case 'diagnostics': await refreshDiag(); break;
+    case 'dns': await refreshDnsPage(); break;
+    case 'tgproxy': await refreshTgPage(); break;
     case 'extension': await refreshBridge(); break;
     case 'logs': await refreshLogs(); break;
     case 'settings': renderSettings(); break;
@@ -601,6 +615,7 @@ document.getElementById('netmon-table-filter').oninput = (e) => { state.netmonTa
 document.getElementById('netmon-table').addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-host]');
   if (!btn || !btn.dataset.host) return;
+  if (!state.config.active_profile) { toast(t('lists.no_active_profile'), 'warn'); return; }
   try {
     const report = await api('list_add', { profileId: state.config.active_profile, listId: btn.dataset.list, entries: [btn.dataset.host] });
     toast(t('netmon.added_to_list', { domain: report.added[0] || btn.dataset.host, list: btn.dataset.list }), 'ok');
@@ -705,6 +720,7 @@ function openIpPicker(app, listId) {
           const sel = [...document.querySelectorAll('#ip-pick-list input[type="checkbox"]:checked')].map((cb) => cb.dataset.addr);
           closeModal();
           if (!sel.length) { toast(t('netmon.no_addresses'), 'warn'); return; }
+          if (!state.config.active_profile) { toast(t('lists.no_active_profile'), 'warn'); return; }
           try {
             const report = await api('list_add', { profileId: state.config.active_profile, listId, entries: sel });
             if (report.added.length) {
@@ -796,6 +812,7 @@ document.getElementById('lists-entries-wrap').addEventListener('change', (e) => 
 document.getElementById('btn-lists-add').onclick = async () => {
   const entries = document.getElementById('lists-add-input').value.split('\n').map((s) => s.trim()).filter(Boolean);
   if (!entries.length) return;
+  if (!state.config.active_profile) { toast(t('lists.no_active_profile'), 'warn'); return; }
   try {
     const report = await api('list_add', { profileId: state.config.active_profile, listId: state.listId, entries });
     document.getElementById('lists-add-input').value = '';
@@ -1567,6 +1584,322 @@ async function installUpdate() {
     await api('zapret_install_update', { profileId, version: state.release.version, url: state.release.download_url });
   } finally {
     state.maintBusy = false;
+  }
+}
+
+/* ═══ ROBLOX DNS ═══ */
+let dnsInited = false;
+async function refreshDnsPage() {
+  if (!dnsInited) { dnsInited = true; bindDns(); }
+  await refreshDnsStatus();
+}
+async function refreshDnsStatus() {
+  try {
+    state.dnsAdapters = await api('dns_status');
+    renderDnsStatus();
+  } catch { /* toasted */ }
+}
+function renderDnsStatus() {
+  const el = document.getElementById('dns-current');
+  if (!el) return;
+  const st = state.dnsAdapters;
+  const warn = document.getElementById('dns-admin-warn');
+  if (warn && st && !st.admin) {
+    warn.hidden = false;
+    warn.textContent = t('dns.not_admin');
+  } else if (warn) warn.hidden = true;
+  const adapters = Array.isArray(st?.adapters) ? st.adapters : (st?.adapters ? [st.adapters] : []);
+  const doh = Array.isArray(st?.doh) ? st.doh : (st?.doh ? [st.doh] : []);
+  let html = '';
+  if (!adapters.length) {
+    html = `<p class="muted small">${esc(t('dns.no_adapter'))}</p>`;
+  } else {
+    html = `<div class="dns-list">` + adapters.map((a) => `
+      <div class="row gap wrap dns-addr">
+        <span class="pill">${esc(a.InterfaceAlias || a.interfacealias || '')}</span>
+        <span class="muted small grow">${esc((a.ServerAddresses || a.serveraddresses || '').split(',').join(', '))}</span>
+      </div>`).join('') + `</div>`;
+  }
+  if (doh.length) {
+    html += `<div class="muted small" style="margin-top:8px">DoH: ${doh.map((d) => `${esc(d.ServerAddress || d.serveraddress)} → ${esc(d.DohTemplate || d.dohtemplate || '?')}`).join('; ')}</div>`;
+  }
+  el.innerHTML = html;
+}
+function renderDnsBusy() {
+  const st = document.getElementById('dns-bench-state');
+  if (st) st.textContent = state.dnsBusy ? t('dns.bench_running') : '';
+  const btn = document.getElementById('btn-dns-bench');
+  if (btn) btn.disabled = state.dnsBusy;
+}
+async function runDnsBench() {
+  if (state.dnsBusy) return;
+  state.dnsBusy = true;
+  renderDnsBusy();
+  try {
+    state.dnsBench = await api('dns_benchmark');
+    renderDnsBench();
+    toast(t('dns.bench_done'), 'ok', 1800);
+  } catch { /* toasted */ } finally {
+    state.dnsBusy = false;
+    renderDnsBusy();
+  }
+}
+function renderDnsBench() {
+  const box = document.getElementById('dns-results');
+  if (!box) return;
+  if (!state.dnsBench?.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  const top = state.dnsBench[0].score;
+  box.innerHTML = state.dnsBench.map((r, i) => `
+    <label class="dns-row ${r.score === top ? 'best' : ''}">
+      <input type="radio" name="dns-pick" value="${i}" ${r.score === top ? 'checked' : ''} />
+      <span class="dns-name">${esc(r.name)}</span>
+      <span class="muted small">${esc(r.primary)} · ${esc(r.secondary)}</span>
+      <span class="dns-metric">${r.rtt_ms != null ? Math.round(r.rtt_ms) + ' мс' : '—'}</span>
+      <span class="dns-metric">${r.resolve_ms != null ? Math.round(r.resolve_ms) + ' мс' : '—'}</span>
+      <span class="dns-metric">${Math.round(r.success_rate * 100)}%</span>
+      <span class="dns-metric">${r.roblox_ok ? '✓' : '✕'}</span>
+      <span class="dns-score">${r.score.toFixed(1)}${r.score === top ? ' ★' : ''}</span>
+    </label>`).join('');
+}
+async function applyDns() {
+  const sel = document.querySelector('input[name="dns-pick"]:checked');
+  if (!sel) { toast(t('dns.pick_hint'), 'warn'); return; }
+  const r = state.dnsBench[+sel.value];
+  const useDoh = document.getElementById('dns-doh')?.checked ?? false;
+  try {
+    await api('dns_apply', { primary: r.primary, secondary: r.secondary, use_doh: useDoh });
+    toast(t('dns.applied', { name: r.name, primary: r.primary }), 'ok');
+    refreshDnsStatus();
+  } catch { /* toasted */ }
+}
+async function resetDns() {
+  confirmModal(t('dns.reset_confirm'), async () => {
+    try {
+      await api('dns_reset');
+      toast(t('dns.resetted'), 'ok');
+      refreshDnsStatus();
+    } catch { /* toasted */ }
+  }, true);
+}
+async function findRbx() {
+  if (state.rbxBusy) return;
+  state.rbxBusy = true;
+  const stEl = document.getElementById('rbx-state');
+  if (stEl) stEl.textContent = t('dns.hosts_analyzing');
+  const btn = document.getElementById('btn-rbx-find');
+  if (btn) btn.disabled = true;
+  try {
+    state.rbxCands = await api('roblox_find');
+    renderRbx();
+  } catch { /* toasted */ } finally {
+    state.rbxBusy = false;
+    if (btn) btn.disabled = false;
+    if (stEl) stEl.textContent = '';
+  }
+}
+function renderRbx() {
+  const box = document.getElementById('rbx-results');
+  if (!box) return;
+  if (!state.rbxCands.length) {
+    box.innerHTML = `<p class="muted small">${esc(t('dns.hosts_empty'))}</p>`;
+    return;
+  }
+  box.innerHTML = state.rbxCands.map((c, i) => `
+    <div class="dns-row">
+      <span class="dns-name">${esc(c.ip)}</span>
+      <span class="dns-metric">${Math.round(c.rtt_ms)} мс</span>
+      <button class="btn ghost" data-rbx-apply="${i}">${esc(t('dns.hosts_apply'))}</button>
+    </div>`).join('');
+  box.querySelectorAll('[data-rbx-apply]').forEach((b) => {
+    b.onclick = async () => {
+      const c = state.rbxCands[+b.dataset.rbxApply];
+      try {
+        await api('roblox_hosts_apply', { ip: c.ip });
+        toast(t('dns.hosts_done', { ip: c.ip }), 'ok');
+        refreshRbxState();
+      } catch { /* toasted */ }
+    };
+  });
+}
+async function refreshRbxState() {
+  try {
+    const active = await api('roblox_hosts_state');
+    const btn = document.getElementById('btn-rbx-revert');
+    if (btn) btn.hidden = !active;
+  } catch { /* toasted */ }
+}
+async function revertRbx() {
+  confirmModal(t('dns.hosts_revert_confirm'), async () => {
+    try {
+      await api('roblox_hosts_revert');
+      toast(t('dns.hosts_reverted'), 'ok');
+      refreshRbxState();
+    } catch { /* toasted */ }
+  }, true);
+}
+function bindDns() {
+  const benchBtn = document.getElementById('btn-dns-bench');
+  if (benchBtn) benchBtn.onclick = runDnsBench;
+  const applyBtn = document.getElementById('btn-dns-apply');
+  if (applyBtn) applyBtn.onclick = applyDns;
+  const resetBtn = document.getElementById('btn-dns-reset');
+  if (resetBtn) resetBtn.onclick = resetDns;
+  const findBtn = document.getElementById('btn-rbx-find');
+  if (findBtn) findBtn.onclick = findRbx;
+  const revBtn = document.getElementById('btn-rbx-revert');
+  if (revBtn) revBtn.onclick = revertRbx;
+  refreshRbxState();
+}
+
+/* ═══ TG WS PROXY ═══ */
+async function refreshTgPage() {
+  if (!state.tgBound) { state.tgBound = true; bindTg(); }
+  await refreshTg();
+  startTgPoll();
+}
+function startTgPoll() {
+  if (state.tgPollTimer) return;
+  state.tgPollTimer = setInterval(async () => {
+    if (state.page !== 'tgproxy') {
+      clearInterval(state.tgPollTimer);
+      state.tgPollTimer = null;
+      return;
+    }
+    await refreshTgSoft();
+  }, 2000);
+}
+async function refreshTgSoft() {
+  try { state.tg = await api('tgproxy_status'); renderTg(); } catch { /* toasted */ }
+}
+async function refreshTg() {
+  state.tg = await api('tgproxy_status');
+  renderTg();
+  await refreshTgLogs();
+}
+function renderTg() {
+  const s = state.tg;
+  if (!s) return;
+  const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? '—'; };
+  setText('tg-version', s.version || '—');
+  setText('tg-venv', s.venv_ok ? t('common.yes') : t('common.no'));
+  setText('tg-secret', s.secret || '—');
+  const linkEl = document.getElementById('tg-link');
+  if (linkEl) linkEl.value = s.link || '';
+  const pathEl = document.getElementById('tg-path');
+  if (pathEl && !pathEl.dataset.userEdited) pathEl.value = s.dir || '';
+  const portEl = document.getElementById('tg-port');
+  if (portEl && !portEl.dataset.userEdited) portEl.value = s.port;
+  const running = !!s.running;
+  const badge = document.getElementById('tg-running-badge');
+  if (badge) { badge.hidden = !running; badge.textContent = '● ' + t('tgproxy.running'); }
+  const startBtn = document.getElementById('btn-tg-start');
+  const stopBtn = document.getElementById('btn-tg-stop');
+  if (startBtn) startBtn.hidden = running;
+  if (stopBtn) stopBtn.hidden = !running;
+  const setupBtn = document.getElementById('btn-tg-setup');
+  if (setupBtn) {
+    setupBtn.disabled = !!s.setup_running;
+    setupBtn.textContent = s.setup_running ? t('tgproxy.setup_running') : t('tgproxy.setup');
+  }
+  const dirHint = document.getElementById('tg-dir-hint');
+  if (dirHint) dirHint.hidden = s.exists;
+}
+async function startTg() {
+  const port = parseInt(document.getElementById('tg-port')?.value || '1443', 10) || 1443;
+  const secret = (document.getElementById('tg-secret')?.textContent || '').trim();
+  try {
+    await api('tgproxy_start', { port, secret: secret || null });
+    toast(t('tgproxy.started'), 'ok');
+    await refreshTg();
+  } catch { /* toasted */ }
+}
+async function stopTg() {
+  try {
+    await api('tgproxy_stop');
+    toast(t('tgproxy.stopped'), 'info');
+    await refreshTg();
+  } catch { /* toasted */ }
+}
+async function setupTg() {
+  try {
+    await api('tgproxy_setup');
+    toast(t('tgproxy.setup_started'), 'info');
+    startTgLogPoll();
+  } catch { /* toasted */ }
+}
+function startTgLogPoll() {
+  if (state.tgLogTimer) return;
+  state.tgLogTimer = setInterval(async () => {
+    if (state.page !== 'tgproxy') {
+      clearInterval(state.tgLogTimer);
+      state.tgLogTimer = null;
+      return;
+    }
+    const busy = state.tg?.setup_running || state.tg?.running;
+    if (!busy) { clearInterval(state.tgLogTimer); state.tgLogTimer = null; return; }
+    await refreshTgLogs();
+  }, 1500);
+}
+async function refreshTgLogs() {
+  try { state.tgLogs = await api('tgproxy_logs', { n: 250 }); renderTgLogs(); } catch { /* toasted */ }
+}
+function renderTgLogs() {
+  const pre = document.getElementById('tg-logs');
+  if (!pre) return;
+  pre.textContent = state.tgLogs.join('\n') || '—';
+  pre.scrollTop = pre.scrollHeight;
+}
+function bindTg() {
+  const startBtn = document.getElementById('btn-tg-start');
+  if (startBtn) startBtn.onclick = startTg;
+  const stopBtn = document.getElementById('btn-tg-stop');
+  if (stopBtn) stopBtn.onclick = stopTg;
+  const setupBtn = document.getElementById('btn-tg-setup');
+  if (setupBtn) setupBtn.onclick = setupTg;
+  const browseBtn = document.getElementById('btn-tg-browse');
+  if (browseBtn) {
+    browseBtn.onclick = async () => {
+      try {
+        const picked = await T.dialog().open({ directory: true, title: t('profile.choose_folder') });
+        if (picked && !Array.isArray(picked)) {
+          await api('tgproxy_set_path', { path: picked });
+          const pathEl = document.getElementById('tg-path');
+          if (pathEl) { pathEl.value = picked; pathEl.dataset.userEdited = '1'; }
+          toast(t('tgproxy.path_saved'), 'ok', 1800);
+          await refreshTg();
+        }
+      } catch { /* toasted */ }
+    };
+  }
+  const copyBtn = document.getElementById('btn-tg-copy');
+  if (copyBtn) {
+    copyBtn.onclick = async () => {
+      const link = document.getElementById('tg-link')?.value || '';
+      if (!link) return;
+      try {
+        await navigator.clipboard.writeText(link);
+        toast(t('common.copied'), 'ok', 1400);
+      } catch {
+        toast(t('common.copy_failed'), 'err');
+      }
+    };
+  }
+  const refreshLogs = document.getElementById('btn-tg-logs-refresh');
+  if (refreshLogs) refreshLogs.onclick = refreshTgLogs;
+  const pathEl = document.getElementById('tg-path');
+  if (pathEl) {
+    pathEl.addEventListener('input', () => { pathEl.dataset.userEdited = '1'; });
+    pathEl.addEventListener('change', async () => {
+      const v = pathEl.value.trim();
+      if (v) {
+        try { await api('tgproxy_set_path', { path: v }); await refreshTg(); } catch { /* toasted */ }
+      }
+    });
+  }
+  const portEl = document.getElementById('tg-port');
+  if (portEl) {
+    portEl.addEventListener('input', () => { portEl.dataset.userEdited = '1'; });
   }
 }
 

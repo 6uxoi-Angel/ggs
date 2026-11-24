@@ -191,6 +191,98 @@
         </div>
       </section>
 
+      <section id="page-dns" class="page" hidden>
+        <header class="page-header">
+          <div>
+            <h2 data-i18n="dns.title"></h2>
+            <p class="muted" data-i18n="dns.subtitle"></p>
+          </div>
+          <div class="header-actions">
+            <button class="btn ghost icon-only help-btn" data-help="dns" title="?">?</button>
+          </div>
+        </header>
+
+        <div class="card">
+          <h3 class="section-title" data-i18n="dns.current_title"></h3>
+          <div id="dns-admin-warn" class="muted small" style="color:var(--warning)" hidden></div>
+          <div id="dns-current"><p class="muted small">…</p></div>
+        </div>
+
+        <div class="card">
+          <div class="row gap wrap">
+            <h3 class="section-title grow" data-i18n="dns.bench_title"></h3>
+            <label class="check"><input type="checkbox" id="dns-doh" checked /><span data-i18n="dns.use_doh"></span></label>
+            <button class="btn primary" id="btn-dns-bench" data-i18n="dns.run_bench"></button>
+            <button class="btn" id="btn-dns-apply" data-i18n="dns.apply_selected"></button>
+            <button class="btn danger" id="btn-dns-reset" data-i18n="dns.reset"></button>
+          </div>
+          <span id="dns-bench-state" class="muted small"></span>
+          <div id="dns-results" hidden></div>
+        </div>
+
+        <div class="card">
+          <h3 class="section-title" data-i18n="dns.hosts_title"></h3>
+          <p class="muted small" data-i18n="dns.hosts_desc"></p>
+          <div class="row gap wrap">
+            <button class="btn primary" id="btn-rbx-find" data-i18n="dns.hosts_analyze"></button>
+            <button class="btn danger" id="btn-rbx-revert" data-i18n="dns.hosts_revert" hidden></button>
+            <span id="rbx-state" class="muted small grow"></span>
+          </div>
+          <div id="rbx-results"></div>
+          <p class="muted small" style="color:var(--warning)" data-i18n="dns.hosts_note"></p>
+        </div>
+      </section>
+
+      <section id="page-tgproxy" class="page" hidden>
+        <header class="page-header">
+          <div>
+            <h2 data-i18n="tgproxy.title"></h2>
+            <p class="muted" data-i18n="tgproxy.subtitle"></p>
+          </div>
+          <div class="header-actions">
+            <button class="btn ghost icon-only help-btn" data-help="tgproxy" title="?">?</button>
+          </div>
+        </header>
+
+        <div class="card">
+          <div class="row gap wrap">
+            <h3 class="section-title grow" data-i18n="tgproxy.status_title"></h3>
+            <span class="pill run" id="tg-running-badge" hidden></span>
+            <button class="btn primary" id="btn-tg-start" data-i18n="tgproxy.start"></button>
+            <button class="btn danger" id="btn-tg-stop" data-i18n="tgproxy.stop" hidden></button>
+          </div>
+          <div class="row gap wrap">
+            <span class="field-label" data-i18n="common.path"></span>
+            <input id="tg-path" class="grow" placeholder="C:\...tg-ws-proxy-main" />
+            <button class="btn ghost" id="btn-tg-browse" data-i18n="profile.choose_folder"></button>
+            <button class="btn ghost" id="btn-tg-setup" data-i18n="tgproxy.setup"></button>
+          </div>
+          <p class="muted small" id="tg-dir-hint" data-i18n="tgproxy.not_found" hidden></p>
+          <div class="row gap wrap">
+            <span class="field-label" data-i18n="common.version"></span><span id="tg-version" class="muted">—</span>
+            <span class="field-label" data-i18n="tgproxy.venv"></span><span id="tg-venv" class="muted">—</span>
+          </div>
+          <div class="row gap wrap">
+            <span class="field-label" data-i18n="tgproxy.port"></span>
+            <input type="number" id="tg-port" class="w-24" min="1024" max="65535" value="1443" />
+            <span class="field-label" data-i18n="tgproxy.secret"></span><code id="tg-secret" class="mono"></code>
+          </div>
+          <div class="row gap wrap">
+            <span class="field-label" data-i18n="tgproxy.link"></span>
+            <input id="tg-link" class="grow mono" readonly />
+            <button class="btn ghost" id="btn-tg-copy" data-i18n="common.copy"></button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="row gap wrap">
+            <h3 class="section-title grow" data-i18n="tgproxy.logs_title"></h3>
+            <button class="btn ghost" id="btn-tg-logs-refresh" data-i18n="common.refresh"></button>
+          </div>
+          <pre id="tg-logs" class="logs-box"></pre>
+        </div>
+      </section>
+
       <section id="page-analysis" class="page" hidden>
         <header class="page-header">
           <div>
