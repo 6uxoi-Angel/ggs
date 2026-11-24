@@ -3,6 +3,7 @@
 //! * [`config`]  — atomic JSON configuration with multi-profile support and
 //!   migration from the legacy Python (v2) configuration.
 //! * [`domain`]  — URL/host/IP normalization (IDNA aware).
+//! * [`fsutil`]  — atomic file replacement (temp + fsync + rename).
 //! * [`lists`]   — zapret domain/IP list editing with atomic writes.
 //! * [`profile`] — the zapret installation profile model (multiple folders).
 //! * [`i18n`]    — RU/EN translations shared by backend and frontend.
@@ -11,6 +12,7 @@
 
 pub mod config;
 pub mod domain;
+pub mod fsutil;
 pub mod i18n;
 pub mod lists;
 pub mod logbuf;

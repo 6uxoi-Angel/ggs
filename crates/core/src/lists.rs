@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::domain::{normalize_list_entry, DomainError};
+use crate::fsutil::atomic_write;
 
 /// One managed list file inside `<zapret>/lists`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -335,14 +336,15 @@ impl ListsManager {
     }
 }
 
+/// Serialize list lines and replace the file atomically: unique temp file in
+/// the same directory, fsync, rename (see [`crate::fsutil::atomic_write`]).
+/// A fixed `*.tmp` name could be clobbered by concurrent writers.
 fn atomic_write_lines(path: &Path, lines: &[String]) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp");
     let mut body = lines.join("\n");
     if !body.is_empty() {
         body.push('\n');
     }
-    fs::write(&tmp, body)?;
-    fs::rename(&tmp, path)
+    atomic_write(path, body.as_bytes())
 }
 
 #[cfg(test)]
@@ -395,6 +397,22 @@ mod tests {
             .unwrap();
         assert_eq!(report.added.len(), 2);
         assert!(mgr.contains("ipset-all", "10.0.0.0/8"));
+    }
+
+    #[test]
+    fn writes_leave_no_temp_files_behind() {
+        let (dir, mgr) = setup();
+        mgr.add("list-general", &["a.example".into()]).unwrap();
+        mgr.add("list-general", &["b.example".into()]).unwrap();
+        mgr.remove("list-general", "a.example").unwrap();
+        mgr.replace("list-general", &["c.example".into()]).unwrap();
+        let leftovers: Vec<_> = fs::read_dir(dir.path().join("lists"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(leftovers.is_empty());
+        assert_eq!(mgr.read("list-general"), vec!["c.example"]);
     }
 
     #[test]

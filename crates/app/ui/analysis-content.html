@@ -1,69 +1,69 @@
-<div class="doc"><p><b>Разбор на 30 сентября 2026 года.</b> Всё, что ниже, — по открытым источникам: рецензируемым исследованиям, независимым замерам и технической документации сообщества. Внутренняя документация операторов и Роскомнадзора недоступна, поэтому механика описана по наблюдениям, и это оговорено явно.</p>
+<div class="doc"><p data-i18n-html="analysis.doc.intro"></p>
 <hr/>
 <div class="card">
-<h3 class="section-title">1. Главное, что нужно понять</h3>
-<p>«Белый список» — это <b>не одна кнопка</b>, а три разных механизма, которые включаются независимо и ломают разное:</p>
-<table class="table"><thead><tr><th>Уровень</th><th>Что фильтруется</th><th>Как выглядит сбой</th><th>Чем лечится</th></tr></thead><tbody>
-<tr><td><b>1. SNI/Host</b></td><td>имя сайта в TLS ClientHello или HTTP <code>Host</code></td><td>сайт не открывается, соединение рвётся или сбрасывается</td><td>фрагментация пакетов, подмена SNI, DoH</td></tr>
-<tr><td><b>2. Объём на соединение</b></td><td>сколько байт прошло в одной TCP-сессии</td><td>страница начинает грузиться и <b>замирает</b> после ~16 КБ, разрыва нет</td><td>цепочка через РФ-узел, ротация соединений</td></tr>
-<tr><td><b>3. IP / CIDR / ASN</b></td><td>адрес назначения и целые автономные системы</td><td>таймаут: пакеты просто не идут</td><td>только узел на «белом» IP внутри РФ</td></tr>
+<h3 class="section-title" data-i18n="analysis.doc.s1.title"></h3>
+<p data-i18n-html="analysis.doc.s1.p1"></p>
+<table class="table"><thead><tr><th data-i18n="analysis.th_level"></th><th data-i18n="analysis.th_filtered"></th><th data-i18n="analysis.th_symptom"></th><th data-i18n="analysis.th_remedy"></th></tr></thead><tbody>
+<tr><td><b>1. SNI/Host</b></td><td data-i18n-html="analysis.doc.s1.r1c2"></td><td data-i18n="analysis.doc.s1.r1c3"></td><td data-i18n="analysis.doc.s1.r1c4"></td></tr>
+<tr><td data-i18n-html="analysis.doc.s1.r2c1"></td><td data-i18n="analysis.doc.s1.r2c2"></td><td data-i18n-html="analysis.doc.s1.r2c3"></td><td data-i18n="analysis.doc.s1.r2c4"></td></tr>
+<tr><td><b>3. IP / CIDR / ASN</b></td><td data-i18n="analysis.doc.s1.r3c2"></td><td data-i18n="analysis.doc.s1.r3c3"></td><td data-i18n="analysis.doc.s1.r3c4"></td></tr>
 </tbody></table>
-<p>Ошибка №1 — лечить уровень 3 инструментами уровня 1. Если фильтрация идёт по IP-адресам, никакая подмена SNI не поможет: соединение дропается <b>до</b> того, как DPI дойдёт до разбора имени хоста.</p>
-<p>Поэтому первым делом определяется режим. Для этого в проекте есть <code>wlprobe</code>.</p>
+<p data-i18n-html="analysis.doc.s1.p2"></p>
+<p data-i18n-html="analysis.doc.s1.p3"></p>
 </div>
 <hr/>
 <div class="card">
-<h3 class="section-title">2. Текущее состояние (2026)</h3>
-<p>Ключевой факт, который меняет всё остальное: **режим белых списков перестал быть аварийным**.</p>
-<p>По данным измерений компании Vigo (цитируется «Коммерсантом» и «Теплицей»), в июле 2026 года только <b>треть мобильных сессий</b> в России проходила без ограничений. К августу 2026 в ряде регионов ЦФО реестр стал обычным способом функционирования мобильного интернета, а не реакцией на инцидент te-st.org, 05.08.2026.</p>
-<p>Важные оговорки к этой цифре:</p>
-<ul><li>это измерения коммерческой компании, а не официальная статистика;</li><li>они охватывают <b>мобильные</b> сети. Проводной домашний интернет ограничения пока почти не затрагивают;</li><li>других сопоставимых данных о частоте включения режима нет.</li></ul>
-<p>Хронология:</p>
-<table class="table"><thead><tr><th>Дата</th><th>Что произошло</th></tr></thead><tbody>
-<tr><td>2016</td><td>«закон Яровой» — правовая база</td></tr>
-<tr><td>2019</td><td>закон о «суверенном интернете», обязанность провайдеров ставить ТСПУ</td></tr>
-<tr><td>2022</td><td>начало активной негативной фильтрации (чёрные списки)</td></tr>
-<tr><td>осень 2025</td><td>идею «белого списка» публично предлагает гендиректор «ВымпелКома» Сергей Анохин; Минцифры одобряет, операторы внедряют</td></tr>
-<tr><td>сентябрь 2025</td><td>первая версия реестра — <b>57 ресурсов</b></td></tr>
-<tr><td>с весны 2025</td><td>массовые отключения мобильного интернета, официально — из-за атак БПЛА</td></tr>
-<tr><td>февраль 2026</td><td>ФСБ запрещает вносить в реестр банковские приложения без СОРМ</td></tr>
-<tr><td><b>1 марта 2026</b></td><td>вступает в силу постановление правительства №1667 «о правилах централизованного управления сетью связи общего пользования», действует до 1 марта 2032</td></tr>
-<tr><td>весна 2026</td><td>перечень превышает сотню сервисов</td></tr>
-<tr><td>август 2026</td><td>оценка — около <b>500 ресурсов</b>; режим фактически постоянен в ряде регионов</td></tr>
+<h3 class="section-title" data-i18n="analysis.doc.s2.title"></h3>
+<p data-i18n-html="analysis.doc.s2.p1"></p>
+<p data-i18n-html="analysis.doc.s2.p2"></p>
+<p data-i18n="analysis.doc.s2.p3"></p>
+<ul><li data-i18n="analysis.doc.s2.li1"></li><li data-i18n-html="analysis.doc.s2.li2"></li><li data-i18n="analysis.doc.s2.li3"></li></ul>
+<p data-i18n="analysis.doc.s2.chrono"></p>
+<table class="table"><thead><tr><th data-i18n="analysis.th_date"></th><th data-i18n="analysis.th_event"></th></tr></thead><tbody>
+<tr><td>2016</td><td data-i18n="analysis.doc.s2.t1"></td></tr>
+<tr><td>2019</td><td data-i18n="analysis.doc.s2.t2"></td></tr>
+<tr><td>2022</td><td data-i18n="analysis.doc.s2.t3"></td></tr>
+<tr><td data-i18n="analysis.doc.s2.date_autumn2025"></td><td data-i18n="analysis.doc.s2.t4"></td></tr>
+<tr><td data-i18n="analysis.doc.s2.date_sep2025"></td><td data-i18n-html="analysis.doc.s2.t5"></td></tr>
+<tr><td data-i18n="analysis.doc.s2.date_spring2025"></td><td data-i18n="analysis.doc.s2.t6"></td></tr>
+<tr><td data-i18n="analysis.doc.s2.date_feb2026"></td><td data-i18n="analysis.doc.s2.t7"></td></tr>
+<tr><td data-i18n-html="analysis.doc.s2.t8"></td><td data-i18n="analysis.doc.s2.t9"></td></tr>
+<tr><td data-i18n="analysis.doc.s2.date_spring2026"></td><td data-i18n="analysis.doc.s2.t10"></td></tr>
+<tr><td data-i18n="analysis.doc.s2.date_aug2026"></td><td data-i18n-html="analysis.doc.s2.t11"></td></tr>
 </tbody></table>
-<p>С 1 марта 2026 Роскомнадзор получил формальные основания для централизованного переключения маршрутизации всего российского сегмента (Forbes, Habr).</p>
+<p data-i18n="analysis.doc.s2.p4"></p>
 </div>
 <hr/>
 <div class="card">
-<h3 class="section-title">3. Техническая архитектура</h3>
-<h4>3.1. ТСПУ</h4>
-<p>Технические средства противодействия угрозам — оборудование глубокой инспекции трафика (DPI), которое с 2019 года обязан устанавливать каждый оператор. Критическая деталь: <b>управляет им исключительно Роскомнадзор</b>, у самих операторов доступа к настройкам нет.</p>
-<p>Рецензируемое исследование Censored Planet (Xue et al., ACM IMC 2022) обнаружило более миллиона узлов в <b>650 автономных системах</b> за устройствами ТСПУ и показало, что блокировки срабатывают по имени домена (SNI), по IP и по протоколу QUIC (dl.acm.org/doi/10.1145/3517745.3561461).</p>
-<p>Число ресурсов в реестре РКН (чёрный список) выросло с 200 тысяч на конец 2021 года до <b>1,2 млн</b> в 2025-м.</p>
-<h4>3.2. Реестр социально значимых сервисов (СЗС)</h4>
-<p>Куратор — Минцифры. Работает на двух уровнях:</p>
-<p><b>Уровень A — по имени домена.</b> Оборудование смотрит, к какому сайту идёт запрос, и пропускает только разрешённые.</p>
-<p><b>Уровень B — по IP-адресам и автономным системам.</b> Пропускается трафик только к разрешённым блокам адресов. Жёстче и обходится принципиально труднее.</p>
-<h4>3.3. Сигнатура «заморозки» — самая важная техническая деталь</h4>
-<p>Это то, что отличает современную российскую фильтрацию от классической.</p>
-<p>По наблюдениям исследователей (net4people/bbs#490, Habr/0ka):</p>
-<ul><li>соединение <b>не разрывается</b>. RST не отправляется;</li><li>как только объём данных в одной TCP-сессии переваливает за <b>≈15–20 КБ</b>, пакеты от сервера просто перестают приходить;</li><li>соединение «висит», пока клиент не отвалится по своему таймауту;</li><li>точнее: фильтр срабатывает примерно после <b>25 пакетов</b> в любом направлении, что в среднем и даёт ~16 КБ полезной нагрузки;</li><li>ограничение applies и к TLS 1.3, и к TLS 1.2 (порог может отличаться);</li><li>применяется не только к TCP, но и к UDP.</li></ul>
-<p>Почему именно «заморозка», а не RST: это <b>дешевле</b> для оборудования. Не нужно генерировать пакеты и подделывать состояние — достаточно перестать пропускать. Отсюда и название в сообществе: ТСПУ перешли в «эконом-режим».</p>
-<p>Практическое следствие: клиент не получает явной ошибки. Он ждёт. Браузер показывает бесконечную загрузку, VPN-клиент «подключается», мессенджер висит в статусе «соединение». Это не баг клиента — это и есть блокировка.</p>
-<p><b>Что при этом не ограничивается:</b> по наблюдениям на момент исследования — SSH/SFTP и иногда RDP (на любых портах). Это делает SSH-туннель отдельным рабочим каналом.</p>
-<h4>3.4. Белый список по SNI существует и он неполный</h4>
-<p>Исследователь 0ka в феврале 2026 просканировал сеть российского провайдера. Выяснилось, что внутри заблокированных AS есть список доменов, трафик к которым не ограничивается. И реализован он <b>непоследовательно</b>:</p>
-<ul><li><code>osu.ppy.sh</code> был в списке разрешённых и открывался;</li><li>при этом другие домены зоны <code>*.ppy.sh</code> в список не входили;</li><li>результат: главная страница сайта игры работает, а загрузка карт, обновлений и подключение к мультиплееру обрываются после первых ~16 КБ.</li></ul>
-<p>Отдельный показательный кейс: <b>7-zip.org</b> размещён на Hetzner (AS24940, полностью ограничена), но продолжал корректно работать, когда большинство других сайтов на Hetzner не открывалось.</p>
-<p>Вывод, который отсюда следует: фильтр работает по схеме <code>*.domain.com:*</code>, то есть поддомены разрешённого домена обычно тоже проходят. Но <b>не всегда</b> — и проверить это можно только эмпирически. Именно для этого в проекте есть команда <code>wlprobe sni</code>.</p>
-<h4>3.5. Масштаб сопутствующего ущерба</h4>
-<p>Тот же скан 0ka (10 февраля 2026, Ростелеком Северо-Запад):</p>
-<ul><li>белый список построен для <b>72 AS</b>;</li><li>пострадала <b>391 AS</b> — свыше <b>225 миллионов IP-адресов</b>.</li></ul>
-<p>Метод грубый: фильтруют оптом, по автономным системам. Под ограничение попали крупнейшие мировые облака и CDN, на которых держится огромная часть «неодобренного» интернета:</p>
-<p><b>Полностью ограниченные AS (выборка):</b></p>
-<table class="table"><thead><tr><th>AS</th><th>Организация</th></tr></thead><tbody>
+<h3 class="section-title" data-i18n="analysis.doc.s3.title"></h3>
+<h4 data-i18n="analysis.doc.s3.h31"></h4>
+<p data-i18n-html="analysis.doc.s3.tspu1"></p>
+<p data-i18n-html="analysis.doc.s3.tspu2"></p>
+<p data-i18n-html="analysis.doc.s3.tspu3"></p>
+<h4 data-i18n="analysis.doc.s3.h32"></h4>
+<p data-i18n="analysis.doc.s3.szs1"></p>
+<p data-i18n-html="analysis.doc.s3.lvlA"></p>
+<p data-i18n-html="analysis.doc.s3.lvlB"></p>
+<h4 data-i18n="analysis.doc.s3.h33"></h4>
+<p data-i18n="analysis.doc.s3.frz1"></p>
+<p data-i18n="analysis.doc.s3.frz2"></p>
+<ul><li data-i18n-html="analysis.doc.s3.frzl1"></li><li data-i18n-html="analysis.doc.s3.frzl2"></li><li data-i18n="analysis.doc.s3.frzl3"></li><li data-i18n-html="analysis.doc.s3.frzl4"></li><li data-i18n="analysis.doc.s3.frzl5"></li><li data-i18n="analysis.doc.s3.frzl6"></li></ul>
+<p data-i18n-html="analysis.doc.s3.frz3"></p>
+<p data-i18n="analysis.doc.s3.frz4"></p>
+<p data-i18n-html="analysis.doc.s3.frz5"></p>
+<h4 data-i18n="analysis.doc.s3.h34"></h4>
+<p data-i18n-html="analysis.doc.s3.sni1"></p>
+<ul><li data-i18n-html="analysis.doc.s3.snil1"></li><li data-i18n-html="analysis.doc.s3.snil2"></li><li data-i18n="analysis.doc.s3.snil3"></li></ul>
+<p data-i18n-html="analysis.doc.s3.sni2"></p>
+<p data-i18n-html="analysis.doc.s3.sni3"></p>
+<h4 data-i18n="analysis.doc.s3.h35"></h4>
+<p data-i18n="analysis.doc.s3.dmg1"></p>
+<ul><li data-i18n-html="analysis.doc.s3.dmgl1"></li><li data-i18n-html="analysis.doc.s3.dmgl2"></li></ul>
+<p data-i18n="analysis.doc.s3.dmg2"></p>
+<p data-i18n-html="analysis.doc.s3.dmg3"></p>
+<table class="table"><thead><tr><th data-i18n="analysis.th_as"></th><th data-i18n="analysis.th_org"></th></tr></thead><tbody>
 <tr><td>174</td><td>Cogent Communications</td></tr>
-<tr><td>1219, 31898, 6142, 14544, 20054</td><td>Oracle / Oracle Cloud (включая US Government и US Defense)</td></tr>
+<tr><td>1219, 31898, 6142, 14544, 20054</td><td data-i18n="analysis.doc.s3.org_oracle"></td></tr>
 <tr><td>12876</td><td>Scaleway</td></tr>
 <tr><td>14061</td><td>DigitalOcean</td></tr>
 <tr><td>16276</td><td>OVH</td></tr>
@@ -81,98 +81,90 @@
 <tr><td>53667</td><td>FranTech (BuyVM)</td></tr>
 <tr><td>9009</td><td>M247</td></tr>
 </tbody></table>
-<p><b>Частично ограниченные (выборка):</b> 13335 Cloudflare, 20940/33905 Akamai International, 15626 GREEN FLOID, 906 DMIT, 18779 EGIHosting, 20853 eTOP, 25697 UpCloud, 32613 Leaseweb Canada, 33028 VEXXHOST.</p>
-<p>Полный список — в исходниках: <code>tools/wlprobe/src/targets.rs</code>, <code>ASN_FULL_BLOCK</code> и <code>ASN_PARTIAL_BLOCK</code>. Команда <code>wlprobe asn <хост></code> сверяет ваш сервер с этой базой.</p>
-<p>Грубость метода видна по конкретному случаю. При блокировке AS174 (Cogent) под фильтр попали объекты, к России отношения не имеющие вообще: домашний роутер ASUS в США (<code>38.172.90.101</code>, фактически используется провайдером Vexus Fiber), роутер в США у провайдера SWAT и роутер в Ливии у провайдера ION. Адресное пространство Cogent используют сторонние сети — и российская фильтрация задела чужую инфраструктуру на других континентах.</p>
-<p><b>Практический вывод:</b> выбор VPS для узла обхода — это нетривиальная задача. Популярные у сообщества Hetzner, OVH, DigitalOcean, AWS и Vultr в списке ограниченных. Cloudflare — частично. Нужна AS вне этих списков.</p>
-<h4>3.6. Как сервис попадает в реестр</h4>
-<p><b>Технические требования</b> (по описанию «Коммерсанта», doc/8862389):</p>
-<ul><li>соответствие условиям по расположению серверов;</li><li><b>не скрывать IP-адрес</b>;</li><li><b>не использовать прокси-соединения</b>;</li><li>проходить сверку адресов.</li></ul>
-<p>То есть ресурс обязан быть полностью просматриваемым для оператора и регулятора. Анонимизирующая инфраструктура не попадает в реестр **по определению** — это не недосмотр, а условие допуска.</p>
-<p><b>Административные требования:</b></p>
-<ul><li>формально ресурс должен быть «социально значимым», но публичных критериев значимости не существует;</li><li>компания может подать заявление, но Минцифры рассмотрит его **только при наличии ходатайства профильного федерального органа власти**;</li><li>с февраля 2026 ФСБ запретила вносить банковские приложения, не установившие СОРМ (TAdviser).</li></ul>
-<p>Логика прямая: хочешь работать при отключении — дай себя просматривать, прочитывать, прослушивать. **Доступ в список выдаётся в обмен на доступ государства к данным.**</p>
-<p><b>Реестр ограничен технически.</b> Минцифры прямо признаёт, что «включение большого количества сервисов невозможно». Поэтому список не резиновый: при каждом новом обострении расширять придётся не инфраструктуру, а географию и строгость применения.</p>
-<h4>3.7. Состав реестра</h4>
-<p>Первая версия (57 ресурсов): РИА Новости, крупные банки и операторы связи, Госуслуги, ВКонтакте, Одноклассники, Mail.ru, национальный мессенджер Max, сервисы Яндекса, маркетплейсы Ozon, Wildberries, Avito.</p>
-<p>Показательная деталь состава: **Max — внутри реестра с сентября 2025. Telegram — снаружи** и при отключениях не работает.</p>
-<p>К весне 2026 перечень превысил сотню сервисов, к августу — по оценке около 500 (официальной цифры нет).</p>
+<p data-i18n-html="analysis.doc.s3.dmg4"></p>
+<p data-i18n-html="analysis.doc.s3.dmg5"></p>
+<p data-i18n-html="analysis.doc.s3.dmg6"></p>
+<p data-i18n-html="analysis.doc.s3.dmg7"></p>
+<h4 data-i18n="analysis.doc.s3.h36"></h4>
+<p data-i18n-html="analysis.doc.s3.reg1"></p>
+<ul><li data-i18n="analysis.doc.s3.regl1"></li><li data-i18n-html="analysis.doc.s3.regl2"></li><li data-i18n-html="analysis.doc.s3.regl3"></li><li data-i18n="analysis.doc.s3.regl4"></li></ul>
+<p data-i18n-html="analysis.doc.s3.reg2"></p>
+<p data-i18n-html="analysis.doc.s3.reg3"></p>
+<ul><li data-i18n="analysis.doc.s3.regl5"></li><li data-i18n-html="analysis.doc.s3.regl6"></li><li data-i18n="analysis.doc.s3.regl7"></li></ul>
+<p data-i18n-html="analysis.doc.s3.reg4"></p>
+<p data-i18n-html="analysis.doc.s3.reg5"></p>
+<h4 data-i18n="analysis.doc.s3.h37"></h4>
+<p data-i18n="analysis.doc.s3.comp1"></p>
+<p data-i18n-html="analysis.doc.s3.comp2"></p>
+<p data-i18n="analysis.doc.s3.comp3"></p>
 </div>
 <hr/>
 <div class="card">
-<h3 class="section-title">4. Что ломается за компанию</h3>
-<p><b>Медицина.</b> Самый тяжёлый задокументированный случай: около восьми месяцев при отключениях интернета не работали системы непрерывного мониторинга глюкозы для больных диабетом — приложения, которые в реальном времени передают показания сенсора на телефон. Их внесли в реестр только после огласки (CNews, 01.04.2026). Всё это время люди с хроническим заболеванием при каждом отключении оставались без данных о собственном состоянии.</p>
-<p>Принципиальный момент: **любой сервис, не попавший в реестр, при отключении просто исчезает — и решает это администратор списка, а не пользователь и не врач.** Если вам критически важен конкретный сервис (медицина, связь с родственниками, рабочие инструменты, 2FA) — его доступность вам не гарантирована и не подконтрольна.</p>
-<p><b>Экономика связи.</b> Человек платит за пакет гигабайтов, а пользоваться ими может только в рамках разрешённого списка. Партнёр Strategy Partners Сергей Кудряшов называет это «эффектом неиспользованного пакета»: разрыв между оплаченным и реально полученным растёт, абоненты чаще меняют оператора. Сами операторы перестраивают тарифные линейки и активнее развивают проводной доступ, который ограничения пока не затрагивают.</p>
-<p><b>Замкнутый круг с голосовой связью.</b> Аналитики отмечают: когда мобильный интернет работает по списку, люди возвращаются к обычным звонкам. Но с осени 2025 организации обязаны покупать маркировку вызова, а немаркированные массовые звонки операторы обрывают. Интернет сужается до реестра → люди переходят на голос → голос к этому моменту уже под собственным разрешительным режимом.</p>
+<h3 class="section-title" data-i18n="analysis.doc.s4.title"></h3>
+<p data-i18n-html="analysis.doc.s4.p1"></p>
+<p data-i18n-html="analysis.doc.s4.p2"></p>
+<p data-i18n-html="analysis.doc.s4.p3"></p>
+<p data-i18n-html="analysis.doc.s4.p4"></p>
 </div>
 <hr/>
 <div class="card">
-<h3 class="section-title">5. Насколько это надёжно работает</h3>
-<p>Отдельно стоит зафиксировать: <b>даже разрешённое работает нестабильно.</b></p>
-<p>По оценке OZI, к середине 2026 года доля успешных соединений в режиме реестра</p>
-<p><b>не превышает 10%</b> (ozi-ru.net/en/art3.html). Во время мартовского отключения в Москве сбоили даже сервисы из списка (RIDL).</p>
-<p>Система, которая должна была оставить работающим «социально значимое», не справляется и с этим.</p>
-<p>Это важно для планирования: **нельзя строить расчёт на том, что «хотя бы Госуслуги и банки будут работать».** Наличие ресурса в реестре — необходимое, но не достаточное условие его доступности.</p>
+<h3 class="section-title" data-i18n="analysis.doc.s5.title"></h3>
+<p data-i18n-html="analysis.doc.s5.p1"></p>
+<p data-i18n="analysis.doc.s5.p2"></p>
+<p data-i18n-html="analysis.doc.s5.p3"></p>
+<p data-i18n="analysis.doc.s5.p4"></p>
+<p data-i18n-html="analysis.doc.s5.p5"></p>
 </div>
 <hr/>
 <div class="card">
-<h3 class="section-title">6. Что реально обходится, а что нет</h3>
-<p>Честная сводка. Именно из неё выросла архитектура инструментов в этом проекте.</p>
-<h4>Работает</h4>
-<table class="table"><thead><tr><th>Метод</th><th>Против чего</th><th>Ограничения</th></tr></thead><tbody>
-<tr><td><b>DoH / DoT</b></td><td>отравленный UDP/53</td><td>не помогает, если 443 наружу закрыт</td></tr>
-<tr><td><b>Фрагментация TLS ClientHello</b> (разрыв внутри SNI)</td><td>уровень 1 (SNI)</td><td>бесполезен при фильтрации по IP</td></tr>
-<tr><td><b>Подставной SNI / Host</b></td><td>уровень 1</td><td>требует знать «белый» домен; не все серверы терпят два ClientHello</td></tr>
-<tr><td><b>Цепочка: клиент → РФ-мост → зарубежная нода</b></td><td>уровни 2 и 3</td><td>нужен РФ-VPS с «белым» IP; поиск такого IP — лотерея</td></tr>
-<tr><td><b>SSH-туннель</b></td><td>уровень 2 (заморозка по объёму)</td><td>SSH по наблюдениям не попадает под лимит; но не спасает от уровня 3</td></tr>
-<tr><td><b>Ротация соединений + HTTP Range</b></td><td>уровень 2</td><td>очень низкая скорость; нужен сервер с <code>Accept-Ranges</code></td></tr>
-<tr><td><b>IPv6</b></td><td>иногда всё</td><td>у части операторов v6-план фильтруется иначе или не фильтруется; проверяется эмпирически</td></tr>
-<tr><td><b>Проводной доступ</b></td><td>всё</td><td>ограничения применяются прежде всего к мобильным сетям</td></tr>
+<h3 class="section-title" data-i18n="analysis.doc.s6.title"></h3>
+<p data-i18n="analysis.doc.s6.p1"></p>
+<h4 data-i18n="analysis.doc.s6.works_h"></h4>
+<table class="table"><thead><tr><th data-i18n="analysis.th_method"></th><th data-i18n="analysis.th_against"></th><th data-i18n="analysis.th_limits"></th></tr></thead><tbody>
+<tr><td><b>DoH / DoT</b></td><td data-i18n="analysis.doc.s6.w1c2"></td><td data-i18n="analysis.doc.s6.w1c3"></td></tr>
+<tr><td data-i18n-html="analysis.doc.s6.w2c1"></td><td data-i18n="analysis.doc.s6.w2c2"></td><td data-i18n="analysis.doc.s6.w2c3"></td></tr>
+<tr><td data-i18n-html="analysis.doc.s6.w3c1"></td><td data-i18n="analysis.doc.s6.w3c2"></td><td data-i18n="analysis.doc.s6.w3c3"></td></tr>
+<tr><td data-i18n-html="analysis.doc.s6.w4c1"></td><td data-i18n="analysis.doc.s6.w4c2"></td><td data-i18n="analysis.doc.s6.w4c3"></td></tr>
+<tr><td data-i18n-html="analysis.doc.s6.w5c1"></td><td data-i18n="analysis.doc.s6.w5c2"></td><td data-i18n="analysis.doc.s6.w5c3"></td></tr>
+<tr><td data-i18n-html="analysis.doc.s6.w6c1"></td><td data-i18n="analysis.doc.s6.w6c2"></td><td data-i18n-html="analysis.doc.s6.w6c3"></td></tr>
+<tr><td><b>IPv6</b></td><td data-i18n="analysis.doc.s6.w7c2"></td><td data-i18n="analysis.doc.s6.w7c3"></td></tr>
+<tr><td data-i18n-html="analysis.doc.s6.w8c1"></td><td data-i18n="analysis.doc.s6.w8c2"></td><td data-i18n="analysis.doc.s6.w8c3"></td></tr>
 </tbody></table>
-<h4>Не работает</h4>
-<table class="table"><thead><tr><th>Метод</th><th>Почему</th></tr></thead><tbody>
-<tr><td>Обычный WireGuard / OpenVPN / IPSec</td><td>легко классифицируется по протоколу, плюс IP-адрес узла вне белого списка</td></tr>
-<tr><td>Tor</td><td>входные узлы и мосты массово попадают под фильтрацию по AS</td></tr>
-<tr><td>Outline, большинство «коробочных» VPN</td><td>та же причина: инфраструктура вне белых списков</td></tr>
-<tr><td>Прямой VLESS+Reality в Европу</td><td><b>не блокируется, а деградирует</b>: сессия замерзает после ~16 КБ</td></tr>
-<tr><td>Любой VPN с зарубежным IP при уровне 3</td><td>соединение дропается до разбора SNI</td></tr>
-<tr><td>Доменное маскирование (domain fronting) через крупные CDN</td><td>Cloudflare (AS13335) ограничен частично, Akamai — полностью</td></tr>
+<h4 data-i18n="analysis.doc.s6.nowork_h"></h4>
+<table class="table"><thead><tr><th data-i18n="analysis.th_method"></th><th data-i18n="analysis.th_why"></th></tr></thead><tbody>
+<tr><td data-i18n="analysis.doc.s6.n1c1"></td><td data-i18n="analysis.doc.s6.n1c2"></td></tr>
+<tr><td>Tor</td><td data-i18n="analysis.doc.s6.n2c2"></td></tr>
+<tr><td data-i18n="analysis.doc.s6.n3c1"></td><td data-i18n="analysis.doc.s6.n3c2"></td></tr>
+<tr><td data-i18n="analysis.doc.s6.n4c1"></td><td data-i18n-html="analysis.doc.s6.n4c2"></td></tr>
+<tr><td data-i18n="analysis.doc.s6.n5c1"></td><td data-i18n="analysis.doc.s6.n5c2"></td></tr>
+<tr><td data-i18n="analysis.doc.s6.n6c1"></td><td data-i18n="analysis.doc.s6.n6c2"></td></tr>
 </tbody></table>
-<p>Ключевая формулировка из независимого разбора: *«Полностью надёжного способа сохранить доступ в режиме реестра СЗС нет — и честно об этом сказать. Средства обхода при жёстких отключениях работают ненадёжно: фильтрация по IP и автономным системам бьёт по той самой инфраструктуре, на которой они держатся»* (te-st.org).</p>
-<h4>Отдельно про «заморозку» и фрагментацию</h4>
-<p>Важно не путать два разных приёма, которые часто смешивают:</p>
-<ul><li><b>Фрагментация TCP-пакетов внутри одного соединения</b> (то, что делают GoodbyeDPI, zapret, наш <code>sniproxy</code>) — помогает против <b>уровня 1</b>, то есть против разбора SNI/Host.</li><li><b>Дробление данных на несколько TCP-соединений</b> — помогает против</li></ul>
-<p>  <b>уровня 2</b>, лимита объёма на сессию.</p>
-<p>Это принципиально разные вещи. Как прямо указано в net4people/bbs#490: фрагментация пакетов внутри одного соединения или разбиение на несколько HTTP-запросов <b>в пределах одного соединения</b> не помогут — лимит считается по TCP-сессии, а не по запросу.</p>
-<p>Расплата за уровень 2 понятна из арифметики: чтобы скачать 50 МБ кусками по ~20 КБ, нужно около <b>2560 TCP-соединений</b>. Это работает, но медленно и само по себе выглядит подозрительно.</p>
+<p data-i18n-html="analysis.doc.s6.p2"></p>
+<h4 data-i18n="analysis.doc.s6.freeze_h"></h4>
+<p data-i18n="analysis.doc.s6.p3"></p>
+<ul><li data-i18n-html="analysis.doc.s6.mixl1"></li><li data-i18n-html="analysis.doc.s6.mixl2"></li></ul>
+<p data-i18n-html="analysis.doc.s6.p4"></p>
+<p data-i18n-html="analysis.doc.s6.p5"></p>
 </div>
 <hr/>
 <div class="card">
-<h3 class="section-title">7. Правовой контекст — прочитайте до того, как настраивать</h3>
-<p>Это не юридическая консультация, а сводка публично известных норм. Законы меняются, и трактовка расширяется. Актуальную оценку риска для вашей ситуации даёт только юрист.</p>
-<table class="table"><thead><tr><th>Норма</th><th>Содержание</th></tr></thead><tbody>
-<tr><td>Использование VPN физлицом</td><td>По состоянию на сентябрь 2026 <b>отдельной ответственности за установку и использование VPN физлицом не предусмотрено</b></td></tr>
-<tr><td>Реклама VPN-сервисов</td><td>Штраф для граждан <b>50 000 – 80 000 ₽</b>, для должностных лиц и ИП 80 000 – 150 000 ₽, для юрлиц <b>500 000 – 500 000 ₽</b> (закон одобрен Совфедом 25.07.2025)</td></tr>
-<tr><td>Поиск «экстремистских» материалов</td><td>Введена ответственность за умышленный поиск заведомо запрещённых материалов через VPN. Ключевые слова — «умышленный» и «заведомо»; как это будет применяться на практике, пока неясно</td></tr>
-<tr><td>Распространение информации о способах обхода блокировок</td><td>Ограничено (нормы 2024 года)</td></tr>
-<tr><td>Хостинг/администрирование узла обхода на территории РФ</td><td>Отдельная зона риска: это уже не «использование», а предоставление возможности неопределённой группе лиц</td></tr>
-<tr><td>Постановление №1667 от 1 марта 2026</td><td>Правила централизованного управления сетью связи общего пользования, действуют до 1 марта 2032</td></tr>
+<h3 class="section-title" data-i18n="analysis.doc.s7.title"></h3>
+<p data-i18n="analysis.doc.s7.p1"></p>
+<table class="table"><thead><tr><th data-i18n="analysis.th_norm"></th><th data-i18n="analysis.th_content"></th></tr></thead><tbody>
+<tr><td data-i18n="analysis.doc.s7.r1c1"></td><td data-i18n-html="analysis.doc.s7.r1c2"></td></tr>
+<tr><td data-i18n="analysis.doc.s7.r2c1"></td><td data-i18n-html="analysis.doc.s7.r2c2"></td></tr>
+<tr><td data-i18n="analysis.doc.s7.r3c1"></td><td data-i18n="analysis.doc.s7.r3c2"></td></tr>
+<tr><td data-i18n="analysis.doc.s7.r4c1"></td><td data-i18n="analysis.doc.s7.r4c2"></td></tr>
+<tr><td data-i18n="analysis.doc.s7.r5c1"></td><td data-i18n="analysis.doc.s7.r5c2"></td></tr>
+<tr><td data-i18n="analysis.doc.s7.r6c1"></td><td data-i18n="analysis.doc.s7.r6c2"></td></tr>
 </tbody></table>
-<p>Практические следствия:</p>
-<ol><li><b>Публичная реклама</b> сервиса, канала, инструкции с referral-ссылками —</li></ol>
-<p>   самый очевидный и самый дорогой риск. Техническая настройка для себя и публичное продвижение — разные вещи с разной ответственностью.</p>
-<ol><li><b>Сервер на территории РФ</b> (РФ-мост в схеме C) — это актив, который может</li></ol>
-<p>   быть изъят или заблокирован, а его владелец идентифицирован. Выбирайте провайдера осознанно и не храните на мосте ничего, что не готовы потерять.</p>
-<ol><li><b>Не храните на устройствах</b> то, что не хотели бы показать при проверке.</li></ol>
-<p>   Режим белых списков сам по себе не означает проверку устройства, но сочетать риски неразумно.</p>
-<ol><li><b>Логи.</b> Любой узел цепочки видит ваш трафик. Зарубежная нода видит</li></ol>
-<p>   назначения, РФ-мост видит факт подключения. Используйте сквозное шифрование на уровне приложений там, где это возможно.</p>
+<p data-i18n="analysis.doc.s7.p2"></p>
+<ol><li data-i18n-html="analysis.doc.s7.li1"></li><li data-i18n-html="analysis.doc.s7.li2"></li><li data-i18n-html="analysis.doc.s7.li3"></li><li data-i18n-html="analysis.doc.s7.li4"></li></ol>
 </div>
 <hr/>
 <div class="card">
-<h3 class="section-title">8. Куда смотреть за актуальными данными</h3>
-<p>Ситуация меняется быстрее, чем пишутся статьи. Полезнее следить за измерениями, чем за заявлениями:</p>
-<ul><li><b>Теплица социальных технологий</b> — te-st.org, разборы с данными измерений. Их веб-чекер режима блокировок: csrlab.org/webcheker2 — работает из браузера, умеет сохранять результат в файл, чтобы отправить позже, когда связь вернётся.</li><li><b>net4people/bbs</b> — github.com/net4people/bbs, рабочий форум по обходу блокировок, issue #490 — первоисточник по «TCP 16-20».</li><li><b>dpi-checkers</b> — github.com/hyperion-cs/dpi-checkers, браузерные проверки и методика перебора белого списка SNI.</li><li><b>Censored Planet</b> — censoredplanet.org, академические измерения цензуры, включая рецензированное исследование ТСПУ.</li><li><b>OZI</b> — ozi-ru.net, «The Blocking Ladder»: хронология и статистика отключений.</li><li><b>Habr / ntc.party</b> — прикладные разборы от практиков; статья 0ka про сканирование AS: habr.com/ru/articles/997088.</li></ul>
+<h3 class="section-title" data-i18n="analysis.doc.s8.title"></h3>
+<p data-i18n="analysis.doc.s8.p1"></p>
+<ul><li data-i18n-html="analysis.doc.s8.li1"></li><li data-i18n-html="analysis.doc.s8.li2"></li><li data-i18n-html="analysis.doc.s8.li3"></li><li data-i18n-html="analysis.doc.s8.li4"></li><li data-i18n-html="analysis.doc.s8.li5"></li><li data-i18n-html="analysis.doc.s8.li6"></li></ul>
 </div>
 <hr/></div>

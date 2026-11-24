@@ -8,8 +8,15 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::consts::*;
+use crate::fsutil::atomic_write;
 use crate::profile::ZapretProfile;
 use crate::random_hex;
+
+/// Newest configuration schema this build understands. A config file stamped
+/// with a GREATER `schema_version` was written by a newer Integra: loading
+/// switches the store to read-only mode so such a file is never silently
+/// downgraded or overwritten.
+pub const CURRENT_SCHEMA_VERSION: u32 = CURRENT_SCHEMA;
 
 /// Per-element colors of a custom theme. `None` means "inherit from the
 /// base builtin theme". Values are `#rrggbb` strings.
@@ -124,6 +131,15 @@ impl Default for TaskbarConfig {
 #[serde(default)]
 pub struct AppConfig {
     pub schema: u32,
+    /// Schema guard (see [`CURRENT_SCHEMA_VERSION`]): files stamped with a
+    /// greater version are never overwritten by this build.
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+    /// One-shot marker: an older/legacy layout has already been normalized,
+    /// so the migration is not repeated on every launch. The config persisted
+    /// after a migration carries the current `schema_version`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub migrated: bool,
     pub language: String,
     pub theme: String,
 
@@ -159,6 +175,10 @@ pub struct AppConfig {
 
     // First-run component check overlay has been acknowledged.
     pub first_run_done: bool,
+}
+
+fn default_schema_version() -> u32 {
+    CURRENT_SCHEMA_VERSION
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +250,8 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             schema: CURRENT_SCHEMA,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            migrated: false,
             language: "ru".into(),
             theme: "dark_accent".into(),
             profiles: Vec::new(),
@@ -288,26 +310,56 @@ impl Default for WindowConfig {
     }
 }
 
+/// What [`read_config_file`] discovered while loading.
+#[derive(Debug, Default)]
+struct LoadOutcome {
+    config: AppConfig,
+    /// An older/legacy layout was normalized: persist the version bump once.
+    migrated: bool,
+    /// The file was written by a NEWER Integra: never overwrite it.
+    too_new: bool,
+}
+
 /// Thread-safe configuration handle.
 pub struct ConfigStore {
     path: PathBuf,
     data: RwLock<AppConfig>,
+    /// Set when the on-disk config came from a newer app version: every save
+    /// is refused so a newer schema can never be clobbered by old defaults.
+    read_only: bool,
 }
 
 impl ConfigStore {
     /// Load configuration from `path` (or the platform default location).
     pub fn load(path: Option<PathBuf>) -> Self {
         let path = path.unwrap_or_else(default_config_path);
-        let mut data = read_config_file(&path);
-        sanitize(&mut data);
-        Self {
+        let mut outcome = read_config_file(&path);
+        sanitize(&mut outcome.config);
+        let store = Self {
             path,
-            data: RwLock::new(data),
+            data: RwLock::new(outcome.config),
+            read_only: outcome.too_new,
+        };
+        if outcome.migrated {
+            // Persist the one-time migration (current schema_version) so it
+            // does not re-run on every launch. Failure is non-fatal: the
+            // in-memory config is already normalized and the next save will
+            // carry it anyway.
+            if let Err(err) = store.save() {
+                eprintln!("[integra-core] config migration could not be persisted: {err}");
+            }
         }
+        store
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// True while the store refuses to write: the on-disk config was written
+    /// by a newer Integra (`schema_version` > [`CURRENT_SCHEMA_VERSION`]).
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     pub fn get(&self) -> AppConfig {
@@ -335,6 +387,11 @@ impl ConfigStore {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
+        if self.read_only {
+            return Err(std::io::Error::other(
+                "config was written by a newer Integra version; refusing to overwrite it",
+            ));
+        }
         let data = self.data.read().clone();
         atomic_write_json(&self.path, &data)
     }
@@ -380,28 +437,95 @@ fn dirs_home() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 
-fn read_config_file(path: &Path) -> AppConfig {
+fn read_config_file(path: &Path) -> LoadOutcome {
     if !path.exists() {
         // Try migrating the legacy Python configuration.
-        if let Some(config) = migrate_legacy(path) {
-            return config;
+        if let Some(mut config) = migrate_legacy(path) {
+            config.schema_version = CURRENT_SCHEMA_VERSION;
+            config.migrated = true;
+            config.schema = CURRENT_SCHEMA;
+            return LoadOutcome {
+                config,
+                migrated: true,
+                too_new: false,
+            };
         }
-        return AppConfig::default();
+        return LoadOutcome::default();
     }
-    match fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str::<AppConfig>(&text) {
-            Ok(mut config) => {
-                config.schema = CURRENT_SCHEMA;
-                config
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => {
+            quarantine_corrupt_config(path, &err);
+            return LoadOutcome::default();
+        }
+    };
+    match serde_json::from_str::<AppConfig>(&text) {
+        Ok(mut config) => {
+            if config.schema_version > CURRENT_SCHEMA_VERSION {
+                eprintln!(
+                    "[integra-core] config {} was written by a newer Integra \
+                     (schema {} > {CURRENT_SCHEMA_VERSION}); loading it read-only \
+                     and refusing to overwrite",
+                    path.display(),
+                    config.schema_version,
+                );
+                // Keep the newer values visible in memory, but never persist
+                // anything over this file.
+                return LoadOutcome {
+                    config,
+                    migrated: false,
+                    too_new: true,
+                };
             }
-            Err(_) => {
-                // Keep the broken file for inspection, fall back to defaults.
-                let broken = path.with_extension("broken.json");
-                let _ = fs::rename(path, broken);
-                AppConfig::default()
+            let mut migrated = false;
+            if config.schema_version < CURRENT_SCHEMA_VERSION && !config.migrated {
+                // Older (pre-versioned) config: normalize once, remember it,
+                // and let ConfigStore::load persist the version bump.
+                config.migrated = true;
+                config.schema_version = CURRENT_SCHEMA_VERSION;
+                migrated = true;
             }
-        },
-        Err(_) => AppConfig::default(),
+            config.schema = CURRENT_SCHEMA;
+            LoadOutcome {
+                config,
+                migrated,
+                too_new: false,
+            }
+        }
+        Err(err) => {
+            quarantine_corrupt_config(path, &err);
+            LoadOutcome::default()
+        }
+    }
+}
+
+/// Keep a timestamped copy of an unreadable/corrupt config next to the
+/// original so the user's data survives until it can be inspected. The
+/// original file is left in place; defaults are used in memory only and
+/// nothing is persisted from this path.
+fn quarantine_corrupt_config(path: &Path, reason: &impl std::fmt::Display) {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup = match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => {
+            parent.join(format!("{}.corrupt-{}", name.to_string_lossy(), stamp))
+        }
+        _ => path.with_extension(format!("corrupt-{stamp}")),
+    };
+    match fs::copy(path, &backup) {
+        Ok(_) => eprintln!(
+            "[integra-core] config {} is corrupt ({reason}); saved a copy to {} \
+             and continuing with in-memory defaults",
+            path.display(),
+            backup.display(),
+        ),
+        Err(err) => eprintln!(
+            "[integra-core] config {} is corrupt ({reason}) and could not be \
+             backed up: {err}",
+            path.display(),
+        ),
     }
 }
 
@@ -569,14 +693,13 @@ fn sanitize(config: &mut AppConfig) {
     config.schema = CURRENT_SCHEMA;
 }
 
+/// Serialize and atomically replace the config file: unique temp file in the
+/// same directory, fsync, rename (see [`crate::fsutil::atomic_write`]). The
+/// previous fixed `config.json.tmp` name let concurrent/interrupted writers
+/// corrupt the file.
 pub fn atomic_write_json(path: &Path, value: &impl Serialize) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(value).map_err(std::io::Error::other)?;
-    fs::write(&tmp, json)?;
-    fs::rename(&tmp, path)
+    atomic_write(path, json.as_bytes())
 }
 
 #[cfg(test)]
@@ -612,6 +735,7 @@ mod tests {
             config.active_profile.as_deref(),
             Some(config.profiles[0].id.as_str())
         );
+        assert_eq!(config.schema_version, CURRENT_SCHEMA_VERSION);
         fs::remove_file(&path).ok();
     }
 
@@ -686,8 +810,73 @@ mod tests {
         fs::write(&path, "{broken").unwrap();
         let store = ConfigStore::load(Some(path.clone()));
         assert_eq!(store.get().theme, "dark_accent");
-        assert!(path.with_extension("broken.json").exists());
-        fs::remove_file(path.with_extension("broken.json")).ok();
+
+        // The corrupt file is preserved as a timestamped copy next to the
+        // original, and the original itself stays untouched (nothing was
+        // persisted from the fallback path).
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{broken");
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let has_copy = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!("{name}.corrupt-"))
+            });
+        assert!(
+            has_copy,
+            "corrupt config must be quarantined next to the original"
+        );
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn refuses_newer_schema_version() {
+        let path = tmp("newer");
+        let mut newer = AppConfig::default();
+        newer.schema_version = CURRENT_SCHEMA_VERSION + 1;
+        newer.theme = "light".into();
+        let raw = serde_json::to_string(&newer).unwrap();
+        fs::write(&path, &raw).unwrap();
+
+        let store = ConfigStore::load(Some(path.clone()));
+        // The newer values stay visible in memory, but every write is refused.
+        assert_eq!(store.get().theme, "light");
+        assert!(store.is_read_only());
+        assert!(
+            store.save().is_err(),
+            "must refuse to overwrite a newer config"
+        );
+        assert!(store.update(|_| {}).is_err());
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            raw,
+            "newer file must stay untouched"
+        );
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn migrates_older_schema_version_once() {
+        let path = tmp("older");
+        fs::write(&path, r#"{"schema_version":1,"theme":"light"}"#).unwrap();
+
+        let store = ConfigStore::load(Some(path.clone()));
+        assert_eq!(store.get().theme, "light");
+        assert_eq!(store.get().schema_version, CURRENT_SCHEMA_VERSION);
+
+        // The normalized config (with the current version + migrated flag)
+        // is persisted exactly once.
+        let back: AppConfig = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(back.schema_version, CURRENT_SCHEMA_VERSION);
+        assert!(back.migrated);
+
+        // Reloading must not re-run the migration.
+        let reloaded = ConfigStore::load(Some(path.clone()));
+        assert!(reloaded.get().migrated, "flag must be persisted");
+        assert_eq!(reloaded.get().schema_version, CURRENT_SCHEMA_VERSION);
+        fs::remove_file(&path).ok();
     }
 
     #[test]

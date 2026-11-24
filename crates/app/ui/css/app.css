@@ -11,10 +11,8 @@
   --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
   --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
   --font: 'Segoe UI', system-ui, -apple-system, 'Noto Sans', sans-serif;
-}
-
-/* ── builtin themes ── */
-body.theme-dark_accent {
+  /* dark_accent palette — the default theme; needs no class on <html>.
+     theme-dark / theme-light override these via html.theme-* (see below). */
   --bg: #14100c;
   --bg-gradient: radial-gradient(1100px 700px at 85% -10%, #3a2a12 0%, transparent 60%),
                  radial-gradient(900px 600px at -10% 110%, #241a08 0%, transparent 55%);
@@ -30,7 +28,9 @@ body.theme-dark_accent {
   --warning: #fbbf24;
   --danger: #f87171;
 }
-body.theme-dark {
+
+/* ── builtin themes (applied to <html> by the inline head script / applyTheme) ── */
+html.theme-dark {
   --bg: #101114;
   --bg-gradient: radial-gradient(1000px 650px at 85% -10%, #23252b 0%, transparent 60%);
   --surface: rgba(255, 255, 255, 0.05);
@@ -45,7 +45,7 @@ body.theme-dark {
   --warning: #fbbf24;
   --danger: #f87171;
 }
-body.theme-light {
+html.theme-light {
   --bg: #f3efe9;
   --bg-gradient: radial-gradient(1000px 650px at 85% -10%, #ffe7bd 0%, transparent 60%),
                  radial-gradient(900px 600px at -10% 110%, #e4d6c0 0%, transparent 55%);
@@ -72,10 +72,22 @@ body {
   color: var(--text);
   background: var(--bg);
   overflow: hidden;
-  user-select: none;
 }
+/* keep text selection off the chrome only; content stays copyable */
+#taskbar, .tab-btn, .btn, .segmented button, .ctx-menu, .ctx-item,
+.pill, .chip .x, .color-row .reset, .progress, #tab-indicator { user-select: none; }
+/* explicitly selectable output/content areas */
+.logs-wrap, .logs-box, .instructions, .log-line, pre, code, .table td,
+.profile-path, .doc, .toast, #tg-link, #tg-secret { user-select: text; }
 input, textarea, select, button { font-family: inherit; color: inherit; }
 input, textarea, select { user-select: text; }
+
+/* keyboard navigation must stay visible in both themes */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.btn:disabled:focus-visible, .btn[aria-busy="true"]:focus-visible { outline: none; }
 
 #app { height: 100vh; display: flex; flex-direction: column; }
 
@@ -235,6 +247,17 @@ body:not(.labels-on) .tab-btn span:not(.ico) { display: none; }
 .btn.ghost { background: transparent; }
 .btn.icon-only { padding: 9px 12px; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+.btn.busy { position: relative; color: transparent !important; pointer-events: none; }
+.btn.busy::after {
+  content: '';
+  position: absolute; top: 50%; left: 50%;
+  width: 14px; height: 14px; margin: -7px 0 0 -7px;
+  border: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: busySpin 0.7s linear infinite;
+}
+@keyframes busySpin { to { transform: rotate(360deg); } }
 .help-btn { border-radius: 50%; width: 34px; justify-content: center; color: var(--muted); }
 
 input, textarea, select {
@@ -250,7 +273,7 @@ select { cursor: pointer; }
 select:hover { border-color: var(--accent); }
 /* Native dropdown popup: force the OS to follow the app theme instead of
    the default light scheme (white popup + light text in dark themes). */
-body.theme-dark_accent select, body.theme-dark select { color-scheme: dark; }
+html:not(.theme-light) select { color-scheme: dark; }
 select option { background: var(--surface-solid); color: var(--text); }
 
 .field { display: flex; flex-direction: column; gap: 5px; }
@@ -514,16 +537,37 @@ select option { background: var(--surface-solid); color: var(--text); }
 @keyframes toastIn { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
 .toast.hide { opacity: 0; transition: opacity 0.3s; }
 
-#mock-banner {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-  background: var(--danger); color: #fff; text-align: center;
-  font-size: 11px; font-weight: 700; letter-spacing: 1px; padding: 3px;
+/* scrollbars for the scrollable containers (logs / lists / tables / modals) */
+#content, .logs-wrap, .logs-box, .table-wrap, .ip-pick-list,
+#modal, .setup-card, .help-text {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent;
 }
+.logs-wrap::-webkit-scrollbar, .logs-box::-webkit-scrollbar,
+.table-wrap::-webkit-scrollbar, .ip-pick-list::-webkit-scrollbar,
+#modal::-webkit-scrollbar, .setup-card::-webkit-scrollbar { width: 10px; height: 10px; }
+.logs-wrap::-webkit-scrollbar-thumb, .logs-box::-webkit-scrollbar-thumb,
+.table-wrap::-webkit-scrollbar-thumb, .ip-pick-list::-webkit-scrollbar-thumb,
+#modal::-webkit-scrollbar-thumb, .setup-card::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.logs-wrap::-webkit-scrollbar-thumb:hover, .logs-box::-webkit-scrollbar-thumb:hover,
+.table-wrap::-webkit-scrollbar-thumb:hover, .ip-pick-list::-webkit-scrollbar-thumb:hover,
+#modal::-webkit-scrollbar-thumb:hover, .setup-card::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent) 60%, transparent);
+  background-clip: padding-box;
+}
+.logs-wrap::-webkit-scrollbar-track, .logs-box::-webkit-scrollbar-track,
+.table-wrap::-webkit-scrollbar-track, .ip-pick-list::-webkit-scrollbar-track,
+#modal::-webkit-scrollbar-track, .setup-card::-webkit-scrollbar-track { background: transparent; }
 
-/* scrollbars */
+/* subtle fallback for every other scrollable area (textareas, etc.) */
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 40%, transparent); border-radius: 999px; }
-::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--accent) 60%, transparent); }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* responsive */
@@ -542,17 +586,17 @@ select option { background: var(--surface-solid); color: var(--text); }
   display: flex; align-items: center; gap: 12px;
   padding: 8px 10px; margin: 4px 0;
   border: 1px solid var(--border); border-radius: 10px;
-  background: color-mix(in srgb, var(--card) 60%, transparent);
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
   cursor: pointer;
 }
 .dns-row.best { border-color: var(--accent); }
 .dns-name { font-weight: 600; min-width: 150px; }
-.dns-metric { font-size: 12px; color: var(--muted-foreground); min-width: 64px; }
+.dns-metric { font-size: 12px; color: var(--muted); min-width: 64px; }
 .dns-score { margin-left: auto; font-weight: 700; color: var(--accent); }
 .mono { font-family: Consolas, 'Cascadia Mono', monospace; font-size: 12px; }
 .logs-box {
   max-height: 260px; overflow-y: auto;
-  background: color-mix(in srgb, var(--background) 80%, #000);
+  background: color-mix(in srgb, var(--bg) 80%, #000);
   border: 1px solid var(--border); border-radius: 10px;
   padding: 10px 12px; font-family: Consolas, 'Cascadia Mono', monospace;
   font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-all;

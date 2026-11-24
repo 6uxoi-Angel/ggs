@@ -1,6 +1,6 @@
 //! Tracking sessions: polling loop, filtering, dedup, reverse DNS.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -57,7 +57,89 @@ pub struct SessionSummary {
 }
 
 type OnEntry = Arc<dyn Fn(&TrackedEntry) + Send + Sync>;
-type EntryStore = Arc<Mutex<Vec<(ConnectionKey, TrackedEntry)>>>;
+
+/// Reverse-DNS cache hard cap; at this many entries the oldest one
+/// (insertion order) is evicted.
+const DNS_CACHE_CAP: usize = 4096;
+
+/// Insertion-ordered connection store with O(1) eviction: the map gives
+/// O(1) lookups/updates by [`ConnectionKey`], the deque keeps the insertion
+/// order (snapshots/exports look exactly like the old `Vec` tail), and the
+/// oldest entry is dropped from both structures when the cap is exceeded.
+#[derive(Default)]
+struct EntryRing {
+    map: HashMap<ConnectionKey, TrackedEntry>,
+    order: VecDeque<ConnectionKey>,
+}
+
+impl EntryRing {
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    fn get_mut(&mut self, key: &ConnectionKey) -> Option<&mut TrackedEntry> {
+        self.map.get_mut(key)
+    }
+
+    fn contains(&self, key: &ConnectionKey) -> bool {
+        self.map.contains_key(key)
+    }
+
+    fn push(&mut self, key: ConnectionKey, entry: TrackedEntry, cap: usize) {
+        if self.map.insert(key.clone(), entry).is_none() {
+            self.order.push_back(key);
+        }
+        while self.order.len() > cap {
+            if let Some(oldest) = self.order.pop_front() {
+                self.map.remove(&oldest);
+            }
+        }
+    }
+
+    /// The last `limit` entries in insertion order (the old `Vec` tail view).
+    fn tail(&self, limit: usize) -> Vec<TrackedEntry> {
+        let skip = self.order.len().saturating_sub(limit.max(1));
+        self.order
+            .iter()
+            .skip(skip)
+            .filter_map(|key| self.map.get(key))
+            .cloned()
+            .collect()
+    }
+
+    fn pids(&self) -> HashSet<u32> {
+        self.map.values().map(|e| e.pid).collect()
+    }
+}
+
+type EntryStore = Arc<Mutex<EntryRing>>;
+
+/// Bounded reverse-DNS cache: `map` for O(1) lookups plus a deque with the
+/// insertion order for deterministic oldest-first eviction.
+#[derive(Default)]
+struct DnsCache {
+    map: HashMap<IpAddr, Option<String>>,
+    order: VecDeque<IpAddr>,
+}
+
+impl DnsCache {
+    fn get(&self, ip: &IpAddr) -> Option<Option<String>> {
+        self.map.get(ip).cloned()
+    }
+
+    fn insert(&mut self, ip: IpAddr, host: Option<String>) {
+        if self.map.contains_key(&ip) {
+            return;
+        }
+        if self.order.len() >= DNS_CACHE_CAP {
+            if let Some(oldest) = self.order.pop_front() {
+                self.map.remove(&oldest);
+            }
+        }
+        self.order.push_back(ip);
+        self.map.insert(ip, host);
+    }
+}
 
 struct Session {
     stop: Arc<AtomicBool>,
@@ -125,7 +207,7 @@ impl Netmon {
 
         let collector = self.collector();
         let stop = Arc::new(AtomicBool::new(false));
-        let entries: EntryStore = Arc::new(Mutex::new(Vec::new()));
+        let entries: EntryStore = Arc::new(Mutex::new(EntryRing::default()));
         let on_entry = self.on_entry.lock().clone();
 
         let loop_stop = stop.clone();
@@ -152,11 +234,7 @@ impl Netmon {
         let store = session.entries.lock();
         let summary = SessionSummary {
             entries: store.len(),
-            processes_seen: store
-                .iter()
-                .map(|(_, e)| e.pid)
-                .collect::<HashSet<_>>()
-                .len(),
+            processes_seen: store.pids().len(),
             duration_secs: session.started.elapsed().as_secs(),
         };
         drop(store);
@@ -179,8 +257,7 @@ impl Netmon {
             return Vec::new();
         };
         let store = store.lock();
-        let start = store.len().saturating_sub(limit.max(1));
-        store[start..].iter().map(|(_, e)| e.clone()).collect()
+        store.tail(limit)
     }
 
     /// Export the current/last session as CSV.
@@ -190,17 +267,17 @@ impl Netmon {
         );
         for e in self.entries(usize::MAX) {
             out.push_str(&format!(
-                "{},{},{},\"{}\",{},{:?},{},{},{},{}\n",
+                "{},{},{},{},{},{:?},{},{},{},{}\n",
                 e.first_seen.to_rfc3339(),
                 e.last_seen.to_rfc3339(),
                 e.hits,
-                e.process.replace('"', "\"\""),
+                csv_cell(&e.process),
                 e.pid,
                 e.proto,
-                e.local,
-                e.remote.unwrap_or_default(),
-                e.host.clone().unwrap_or_default(),
-                e.service.clone().unwrap_or_default(),
+                csv_cell(&e.local),
+                csv_cell(e.remote.as_deref().unwrap_or_default()),
+                csv_cell(e.host.as_deref().unwrap_or_default()),
+                csv_cell(e.service.as_deref().unwrap_or_default()),
             ));
         }
         out
@@ -222,7 +299,6 @@ fn run_session(
     entries: EntryStore,
     on_entry: Option<OnEntry>,
 ) {
-    let mut seen: HashMap<ConnectionKey, usize> = HashMap::new();
     let mut process_cache: HashMap<u32, ProcessInfo> = HashMap::new();
     let mut matched_pids: HashSet<u32> = HashSet::new();
     let process_refresh = config.process_refresh;
@@ -230,8 +306,7 @@ fn run_session(
 
     // Reverse-DNS worker keeps blocking lookups off the polling loop.
     let (resolve_tx, resolve_rx): (Sender<IpAddr>, Receiver<IpAddr>) = channel();
-    let dns_cache: Arc<Mutex<HashMap<IpAddr, Option<String>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let dns_cache: Arc<Mutex<DnsCache>> = Arc::new(Mutex::new(DnsCache::default()));
     let resolver = if config.resolve_hosts {
         std::thread::Builder::new()
             .name("integra-netmon-dns".into())
@@ -282,8 +357,8 @@ fn run_session(
                     continue;
                 }
                 let key = conn.key();
-                if let Some(&index) = seen.get(&key) {
-                    if let Some((_, entry)) = store.get_mut(index) {
+                if store.contains(&key) {
+                    if let Some(entry) = store.get_mut(&key) {
                         entry.last_seen = now;
                         entry.hits += 1;
                     }
@@ -310,15 +385,8 @@ fn run_session(
                     last_seen: now,
                     hits: 1,
                 };
-                seen.insert(key, store.len());
-                store.push((key, entry.clone()));
-                if store.len() > config.max_entries {
-                    let (evicted, _) = store.remove(0);
-                    seen.remove(&evicted);
-                    for index in seen.values_mut() {
-                        *index = index.saturating_sub(1);
-                    }
-                }
+                // O(1) amortized insert + oldest-first eviction.
+                store.push(key, entry.clone(), config.max_entries);
                 if let Some(ip) = conn.remote_ip() {
                     if config.resolve_hosts && !ip.is_loopback() && !ip.is_unspecified() {
                         pending_resolve.push(ip);
@@ -330,7 +398,7 @@ fn run_session(
             }
         }
         for ip in pending_resolve {
-            let cached = dns_cache.lock().get(&ip).cloned();
+            let cached = dns_cache.lock().get(&ip);
             match cached {
                 Some(Some(host)) => apply_host(&entries, &ip, &host),
                 Some(None) => {}
@@ -353,24 +421,47 @@ fn run_session(
 fn apply_host(entries: &EntryStore, ip: &IpAddr, host: &str) {
     let needle = ip.to_string();
     let mut store = entries.lock();
-    for (_, entry) in store.iter_mut() {
+    for entry in store.map.values_mut() {
         if entry.host.is_none() && entry.remote_ip.as_deref() == Some(needle.as_str()) {
             entry.host = Some(host.to_string());
         }
     }
 }
 
+/// CSV text cell: always quoted with escaped inner quotes, and prefixed with
+/// `'` when the value could be evaluated as a formula by spreadsheet apps
+/// (leading `=`, `+`, `-`, `@`, tab or CR) — classic CSV-injection guard.
+fn csv_cell(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 3);
+    if value
+        .trim_start()
+        .starts_with(['=', '+', '-', '@', '\t', '\r'])
+    {
+        out.push('\'');
+    }
+    out.push('"');
+    for ch in value.chars() {
+        if ch == '"' {
+            out.push_str("\"\"");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn resolver_loop(
     rx: Receiver<IpAddr>,
     entries: EntryStore,
-    cache: Arc<Mutex<HashMap<IpAddr, Option<String>>>>,
+    cache: Arc<Mutex<DnsCache>>,
     stop: Arc<AtomicBool>,
 ) {
     while !stop.load(Ordering::Relaxed) {
         let Ok(ip) = rx.recv_timeout(Duration::from_millis(250)) else {
             continue;
         };
-        if let Some(cached) = cache.lock().get(&ip).cloned() {
+        if let Some(cached) = cache.lock().get(&ip) {
             if let Some(host) = cached {
                 apply_host(&entries, &ip, &host);
             }

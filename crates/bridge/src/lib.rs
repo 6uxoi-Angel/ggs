@@ -11,7 +11,9 @@
 //! API version 2 adds: `POST /api/domains` (bulk add), `GET /api/profiles`,
 //! and profile scoping via the `profile` query/body field.
 
+use std::collections::{HashMap, VecDeque};
 use std::io::Read;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -25,6 +27,22 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 pub const API_VERSION: u32 = 2;
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
 const PAIRING_TTL: Duration = Duration::from_secs(15 * 60);
+
+/// Pairing brute-force protection.
+const PAIR_WINDOW: Duration = Duration::from_secs(10 * 60);
+const PAIR_MAX_ATTEMPTS: usize = 5;
+const PAIR_LOCKOUT: Duration = Duration::from_secs(10 * 60);
+const PAIR_MAX_FAILURES: u32 = 5;
+
+/// Origins allowed to talk to the loopback API. A missing Origin is NOT
+/// accepted: every browser context (and the Tauri webview) sends one, and
+/// requiring it closes the CSRF hole for non-browser callers that would
+/// otherwise skip the check.
+const ALLOWED_ORIGINS: [&str; 3] = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+];
 
 /// Backend operations the bridge needs; implemented by the app layer so this
 /// crate stays UI- and profile-agnostic.
@@ -47,6 +65,10 @@ pub trait BridgeStore: Send + Sync {
 struct Pairing {
     code: String,
     expires: Instant,
+    /// Failed verification attempts against the CURRENT code.
+    failures: u32,
+    /// Pairing is temporarily locked after repeated failed verifications.
+    locked_until: Option<Instant>,
 }
 
 struct Running {
@@ -58,6 +80,8 @@ pub struct BridgeServer {
     store: Arc<dyn BridgeStore>,
     token: Mutex<String>,
     pairing: Mutex<Pairing>,
+    /// Sliding-window pairing attempts per client IP (brute-force guard).
+    pair_attempts: Mutex<HashMap<IpAddr, VecDeque<Instant>>>,
     port: AtomicU16,
     running: Mutex<Option<Running>>,
 }
@@ -68,6 +92,7 @@ impl BridgeServer {
             store,
             token: Mutex::new(token),
             pairing: Mutex::new(fresh_pairing()),
+            pair_attempts: Mutex::new(HashMap::new()),
             port: AtomicU16::new(port),
             running: Mutex::new(None),
         })
@@ -463,6 +488,30 @@ impl BridgeServer {
         }
     }
 
+    /// Sliding-window rate limit for `POST /pair`: at most
+    /// [`PAIR_MAX_ATTEMPTS`] attempts per client IP per [`PAIR_WINDOW`].
+    /// Returns `Some(retry_after_secs)` when the request must be rejected.
+    /// Stale entries are pruned opportunistically on every call.
+    fn pair_rate_limited(&self, ip: IpAddr) -> Option<u64> {
+        let mut attempts = self.pair_attempts.lock();
+        let now = Instant::now();
+        attempts.retain(|_, window| {
+            window.retain(|t| now.duration_since(*t) < PAIR_WINDOW);
+            !window.is_empty()
+        });
+        let window = attempts.entry(ip).or_default();
+        if window.len() >= PAIR_MAX_ATTEMPTS {
+            let oldest = window.front().copied().unwrap_or(now);
+            let retry_after = PAIR_WINDOW
+                .saturating_sub(now.duration_since(oldest))
+                .as_secs()
+                .max(1);
+            return Some(retry_after);
+        }
+        window.push_back(now);
+        None
+    }
+
     fn handle_pair(self: &Arc<Self>, mut request: Request, origin: Option<&str>) {
         let payload = match self.read_json(&mut request) {
             Ok(payload) => payload,
@@ -474,10 +523,45 @@ impl BridgeServer {
             .unwrap_or("")
             .trim()
             .to_string();
-        let pairing = self.pairing.lock();
+        let client_ip = request
+            .remote_addr()
+            .map(|addr| addr.ip())
+            .unwrap_or(IpAddr::from([127, 0, 0, 1]));
+
+        // (a) per-client-IP sliding window — counts every attempt.
+        if let Some(retry_after) = self.pair_rate_limited(client_ip) {
+            return respond_rate_limited(
+                request,
+                origin,
+                retry_after,
+                json!({"ok": false, "error": "too many pairing attempts, try again later"}),
+            );
+        }
+
+        let mut pairing = self.pairing.lock();
+        // (b) lockout after repeated failed verifications of the current code.
+        if let Some(until) = pairing.locked_until {
+            if until > Instant::now() {
+                let retry_after = until.duration_since(Instant::now()).as_secs().max(1);
+                drop(pairing);
+                return respond_rate_limited(
+                    request,
+                    origin,
+                    retry_after,
+                    json!({"ok": false, "error": "pairing is locked after failed attempts"}),
+                );
+            }
+        }
         let valid = pairing.expires > Instant::now()
             && bool::from(code.as_bytes().ct_eq(pairing.code.as_bytes()));
         if !valid {
+            pairing.failures = pairing.failures.saturating_add(1);
+            if pairing.failures >= PAIR_MAX_FAILURES {
+                pairing.locked_until = Some(Instant::now() + PAIR_LOCKOUT);
+                pairing.failures = 0;
+                self.store
+                    .log("WARN", "pairing locked after repeated failed codes");
+            }
             drop(pairing);
             return respond(
                 request,
@@ -486,9 +570,12 @@ impl BridgeServer {
                 json!({"ok": false, "error": integra_core::i18n::tr("bridge.bad_pair_code")}),
             );
         }
+        // (c) A successful pair must never be replayable: rotate the code at
+        // once (the previously issued 6-digit code is dead from here on).
+        *pairing = fresh_pairing();
+        drop(pairing);
         let token = self.token.lock().clone();
         let port = self.actual_port();
-        drop(pairing);
         self.store
             .log("INFO", &integra_core::i18n::tr("bridge.connected"));
         respond(
@@ -541,6 +628,8 @@ fn fresh_pairing() -> Pairing {
     Pairing {
         code,
         expires: Instant::now() + PAIRING_TTL,
+        failures: 0,
+        locked_until: None,
     }
 }
 
@@ -593,19 +682,25 @@ fn header_value(request: &Request, name: &str) -> Option<String> {
         .map(|h| h.value.as_str().to_string())
 }
 
+fn origin_allowed(origin: &str) -> bool {
+    origin.starts_with("chrome-extension://")
+        || origin.starts_with("moz-extension://")
+        || ALLOWED_ORIGINS.contains(&origin)
+}
+
 fn valid_origin(origin: Option<&str>) -> bool {
     match origin {
-        Some(origin) => {
-            origin.starts_with("chrome-extension://") || origin.starts_with("moz-extension://")
-        }
-        None => true, // non-browser clients (curl, tests) carry no Origin
+        Some(origin) => origin_allowed(origin),
+        // CSRF hardening: an absent Origin no longer passes. Every browser
+        // context sends Origin; non-browser callers must present the token.
+        None => false,
     }
 }
 
 fn with_cors<R: Read>(response: Response<R>, origin: Option<&str>) -> Response<R> {
     let mut response = response;
     if let Some(origin) = origin {
-        if origin.starts_with("chrome-extension://") || origin.starts_with("moz-extension://") {
+        if origin_allowed(origin) {
             if let Ok(header) = Header::from_bytes("Access-Control-Allow-Origin", origin.as_bytes())
             {
                 response.add_header(header);
@@ -638,6 +733,20 @@ fn respond(request: Request, origin: Option<&str>, status: u16, payload: Value) 
     let response = response.with_header(
         Header::from_bytes("Content-Type", b"application/json; charset=utf-8").unwrap(),
     );
+    let _ = request.respond(response);
+}
+
+/// `429 Too Many Requests` with a `Retry-After` header (pairing throttling).
+fn respond_rate_limited(request: Request, origin: Option<&str>, retry_after: u64, payload: Value) {
+    let body = serde_json::to_vec(&payload).unwrap_or_default();
+    let response = Response::from_data(body).with_status_code(StatusCode(429));
+    let mut response = with_cors(response, origin);
+    if let Ok(header) = Header::from_bytes("Retry-After", retry_after.to_string().as_bytes()) {
+        response.add_header(header);
+    }
+    if let Ok(header) = Header::from_bytes("Content-Type", b"application/json; charset=utf-8") {
+        response.add_header(header);
+    }
     let _ = request.respond(response);
 }
 
@@ -709,18 +818,32 @@ mod tests {
         let port = bridge.start().unwrap();
         assert!(port > 0);
 
-        // /health is open.
+        // /health is open — but only for an allowed Origin.
         let (status, body) = raw_request(
             port,
-            "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+            "GET /health HTTP/1.1\r\nHost: x\r\nOrigin: chrome-extension://integra-test\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 200);
         assert!(body.contains("integra-bridge"));
 
+        // A missing Origin must NOT pass (CSRF hardening).
+        let (status, _) = raw_request(
+            port,
+            "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(status, 403);
+
+        // Tauri webview origins are allowed too.
+        let (status, _) = raw_request(
+            port,
+            "GET /health HTTP/1.1\r\nHost: x\r\nOrigin: https://tauri.localhost\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(status, 200);
+
         // API requires the token.
         let (status, _) = raw_request(
             port,
-            "GET /api/status HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+            "GET /api/status HTTP/1.1\r\nHost: x\r\nOrigin: chrome-extension://integra-test\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 401);
 
@@ -728,7 +851,7 @@ mod tests {
         let wrong = r#"{"code":"000000"}"#;
         let (status, _) = raw_request(
             port,
-            &format!("POST /pair HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", wrong.len(), wrong),
+            &format!("POST /pair HTTP/1.1\r\nHost: x\r\nOrigin: chrome-extension://integra-test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", wrong.len(), wrong),
         );
         assert_eq!(status, 401);
 
@@ -737,17 +860,24 @@ mod tests {
         let body = format!("{{\"code\":\"{code}\"}}");
         let (status, resp) = raw_request(
             port,
-            &format!("POST /pair HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body),
+            &format!("POST /pair HTTP/1.1\r\nHost: x\r\nOrigin: chrome-extension://integra-test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body),
         );
         assert_eq!(status, 200);
         let parsed: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(parsed["token"], "secret-token");
         assert_eq!(parsed["api_version"], API_VERSION);
 
+        // Code rotation: a successful code can never pair again.
+        let (status, _) = raw_request(
+            port,
+            &format!("POST /pair HTTP/1.1\r\nHost: x\r\nOrigin: chrome-extension://integra-test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body),
+        );
+        assert_eq!(status, 401);
+
         // Authorized status.
         let (status, resp) = raw_request(
             port,
-            "GET /api/status HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer secret-token\r\nConnection: close\r\n\r\n",
+            "GET /api/status HTTP/1.1\r\nHost: x\r\nOrigin: chrome-extension://integra-test\r\nAuthorization: Bearer secret-token\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 200);
         let parsed: Value = serde_json::from_str(&resp).unwrap();
@@ -756,14 +886,14 @@ mod tests {
         // Ping + domain lookup + bulk add + delete.
         let (status, resp) = raw_request(
             port,
-            "GET /api/ping?host=discord.com HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer secret-token\r\nConnection: close\r\n\r\n",
+            "GET /api/ping?host=discord.com HTTP/1.1\r\nHost: x\r\nOrigin: chrome-extension://integra-test\r\nAuthorization: Bearer secret-token\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 200);
         assert!(resp.contains("\"latency_ms\":42"));
 
         let (status, resp) = raw_request(
             port,
-            "GET /api/domain?domain=in-bypass.example HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer secret-token\r\nConnection: close\r\n\r\n",
+            "GET /api/domain?domain=in-bypass.example HTTP/1.1\r\nHost: x\r\nOrigin: chrome-extension://integra-test\r\nAuthorization: Bearer secret-token\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 200);
         assert!(resp.contains("\"bypass\":true"));
@@ -771,14 +901,14 @@ mod tests {
         let bulk = r#"{"domains":["a.example","b.example"],"mode":"bypass"}"#;
         let (status, resp) = raw_request(
             port,
-            &format!("POST /api/domains HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer secret-token\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", bulk.len(), bulk),
+            &format!("POST /api/domains HTTP/1.1\r\nHost: x\r\nOrigin: chrome-extension://integra-test\r\nAuthorization: Bearer secret-token\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", bulk.len(), bulk),
         );
         assert_eq!(status, 200);
         assert!(resp.contains("a.example"));
 
         let (status, resp) = raw_request(
             port,
-            "DELETE /api/domain?domain=x.example HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer secret-token\r\nConnection: close\r\n\r\n",
+            "DELETE /api/domain?domain=x.example HTTP/1.1\r\nHost: x\r\nOrigin: chrome-extension://integra-test\r\nAuthorization: Bearer secret-token\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 200);
         assert!(resp.contains("removed_from"));
@@ -800,12 +930,37 @@ mod tests {
         // Unknown route.
         let (status, _) = raw_request(
             port,
-            "GET /api/nope HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer secret-token\r\nConnection: close\r\n\r\n",
+            "GET /api/nope HTTP/1.1\r\nHost: x\r\nOrigin: chrome-extension://integra-test\r\nAuthorization: Bearer secret-token\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 404);
 
         bridge.stop();
         assert!(!bridge.is_running());
+    }
+
+    /// Five failed verifications must lock/rate-limit pairing: the 6th
+    /// attempt from the same IP is rejected with 429.
+    #[test]
+    fn pairing_rate_limit_and_lockout() {
+        let bridge = BridgeServer::new(Arc::new(MockStore), "secret-token".into(), 0);
+        let port = bridge.start().unwrap();
+        let wrong = r#"{"code":"000000"}"#;
+        let pair_wrong = |port: u16| {
+            raw_request(
+                port,
+                &format!(
+                    "POST /pair HTTP/1.1\r\nHost: x\r\nOrigin: chrome-extension://integra-test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    wrong.len(),
+                    wrong
+                ),
+            )
+            .0
+        };
+        for _ in 0..5 {
+            assert_eq!(pair_wrong(port), 401);
+        }
+        assert_eq!(pair_wrong(port), 429);
+        bridge.stop();
     }
 
     #[test]

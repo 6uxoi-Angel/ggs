@@ -77,18 +77,37 @@ const state = {
   tgLogTimer: null,
 };
 
-/* ── i18n ── */
+/* ── i18n ──
+   Resolution order: backend bundle (selected language) → window.__I18N_DATA__
+   (UI source of truth, key -> [ru, en]) → ru → en → the key itself. */
 function t(key, args) {
-  let out = state.bundle[key] ?? key;
+  let out = state.bundle[key];
+  if (out == null) {
+    const pair = window.__I18N_DATA__?.[key];
+    if (pair) {
+      const lang = state.config?.language === 'en' ? 1 : 0;
+      out = pair[lang] ?? pair[0] ?? pair[1];
+    }
+  }
+  if (out == null) out = key;
   if (args) for (const [name, value] of Object.entries(args)) out = out.replaceAll(`{${name}}`, value);
   return out;
 }
 function esc(s) {
-  return String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+  return String(s ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 function applyI18n(root = document) {
   root.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  // keys whose translations contain inline markup (<b>, <code>, <i> …)
+  root.querySelectorAll('[data-i18n-html]').forEach((el) => { el.innerHTML = t(el.dataset.i18nHtml); });
   root.querySelectorAll('[data-i18n-placeholder]').forEach((el) => { el.placeholder = t(el.dataset.i18nPlaceholder); });
+  root.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });
+  root.querySelectorAll('[data-i18n-aria-label]').forEach((el) => { el.setAttribute('aria-label', t(el.dataset.i18nAriaLabel)); });
 }
 
 /* ── api wrapper ── */
@@ -122,21 +141,65 @@ function toast(message, type = 'info', ms = 3600) {
   box.appendChild(el);
   setTimeout(() => { el.classList.add('hide'); setTimeout(() => el.remove(), 350); }, ms);
 }
+
+/* Modal accessibility: a stack of openers (nested opens replace the same
+   dialog node), Escape closes the top-most open modal, focus is trapped
+   inside while open and returns to the opener on close. */
+const modalStack = [];
+function focusableIn(root) {
+  return [...root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+    .filter((el) => !el.disabled && el.offsetParent !== null);
+}
 function openModal({ title, body, actions = [{ label: t('common.ok') }] }) {
+  modalStack.push({ opener: document.activeElement });
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = body;
   const box = document.getElementById('modal-actions');
   box.innerHTML = '';
   for (const action of actions) {
     const btn = document.createElement('button');
+    btn.type = 'button';
     btn.className = `btn ${action.kind || 'ghost'}`;
     btn.textContent = action.label;
     btn.onclick = () => { if (action.onClick) action.onClick(); else closeModal(); };
     box.appendChild(btn);
   }
   document.getElementById('modal-backdrop').hidden = false;
+  requestAnimationFrame(() => {
+    const first = focusableIn(document.getElementById('modal'))[0];
+    if (first) first.focus();
+  });
 }
-function closeModal() { document.getElementById('modal-backdrop').hidden = true; }
+function closeModal() {
+  const backdrop = document.getElementById('modal-backdrop');
+  if (backdrop.hidden) return;
+  modalStack.pop();
+  backdrop.hidden = true;
+  // restore focus to the nearest opener that is still in the document
+  while (modalStack.length) {
+    const { opener } = modalStack[modalStack.length - 1];
+    if (opener && opener.isConnected) { opener.focus(); return; }
+    modalStack.pop();
+  }
+}
+document.addEventListener('keydown', (e) => {
+  const backdrop = document.getElementById('modal-backdrop');
+  if (backdrop.hidden) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeModal();
+  } else if (e.key === 'Tab') {
+    // trap focus inside the modal while it is open
+    const modal = document.getElementById('modal');
+    const items = focusableIn(modal);
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    else if (!modal.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+  }
+});
 function confirmModal(text, onYes, danger = true) {
   openModal({
     title: t('common.status'),
@@ -146,6 +209,25 @@ function confirmModal(text, onYes, danger = true) {
       { label: t('common.no') },
     ],
   });
+}
+
+/* ── busy helper ── */
+async function withBusy(btn, fn) {
+  if (!btn) return fn();
+  if (btn.dataset.busy === '1') return undefined;
+  btn.dataset.busy = '1';
+  const wasDisabled = btn.disabled;
+  btn.disabled = true;
+  btn.setAttribute('aria-busy', 'true');
+  btn.classList.add('busy');
+  try {
+    return await fn();
+  } finally {
+    btn.disabled = wasDisabled;
+    btn.removeAttribute('aria-busy');
+    btn.classList.remove('busy');
+    delete btn.dataset.busy;
+  }
 }
 
 /* ── theme & taskbar ── */
@@ -163,8 +245,11 @@ async function applyTheme() {
   const preset = isPreset ? presetById(theme.slice(7)) : null;
   const base = isPreset ? (preset?.base || 'dark_accent') : (BUILTIN_THEMES.includes(theme) ? theme : 'dark_accent');
 
-  document.body.classList.remove(...BUILTIN_THEMES.map((x) => `theme-${x}`));
-  document.body.classList.add(`theme-${base}`);
+  // Theme classes live on <html> so the inline head script can pre-apply them
+  // before first paint (no FOUC). dark_accent is the CSS default: no class.
+  document.documentElement.classList.remove('theme-dark', 'theme-light');
+  if (base === 'dark' || base === 'light') document.documentElement.classList.add(`theme-${base}`);
+  try { localStorage.setItem('integra.theme', base); } catch { /* best effort */ }
   applyTaskbar();
 
   // Custom colors must live on <body> inline style: a class rule on body
@@ -272,20 +357,58 @@ function buildTabs() {
   box.innerHTML = '';
   for (const tab of TABS) {
     const btn = document.createElement('button');
+    btn.type = 'button';
     btn.className = 'tab-btn';
+    btn.id = `tab-${tab.id}`;
     btn.dataset.page = tab.id;
     btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-controls', `page-${tab.id}`);
     btn.innerHTML = `<span class="ico">${tab.ico}</span><span class="tab-label">${esc(t('nav.' + tab.id))}</span>`;
     btn.onclick = () => show(tab.id);
     box.appendChild(btn);
   }
+  // pair each panel with its tab (aria-controls ↔ panel id)
+  document.querySelectorAll('#content .page').forEach((panel) => {
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', `tab-${panel.id.slice(5)}`);
+  });
+  syncTabsA11y();
   applyI18n(box);
 }
+/** aria-selected + roving tabindex for the role="tab" buttons. */
+function syncTabsA11y() {
+  const tabs = [...document.querySelectorAll('#tab-buttons .tab-btn')];
+  for (const tab of tabs) {
+    const active = tab.dataset.page === state.page;
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    tab.tabIndex = active ? 0 : -1;
+  }
+}
+/** Keyboard navigation on the tablist: ArrowLeft/Right, Home, End. */
+document.getElementById('tab-buttons').addEventListener('keydown', (e) => {
+  const tabs = [...document.querySelectorAll('#tab-buttons .tab-btn')];
+  if (!tabs.length) return;
+  const cur = tabs.findIndex((b) => b.dataset.page === state.page);
+  let next = -1;
+  if (e.key === 'ArrowRight') next = (cur + 1) % tabs.length;
+  else if (e.key === 'ArrowLeft') next = (cur - 1 + tabs.length) % tabs.length;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = tabs.length - 1;
+  if (next < 0) return;
+  e.preventDefault();
+  tabs[next].focus();
+  show(tabs[next].dataset.page);
+});
 async function show(page) {
   state.page = page;
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
   document.querySelectorAll('.page').forEach((p) => { p.hidden = p.id !== `page-${page}`; });
+  syncTabsA11y();
   moveIndicator();
+
+  // netmon polling only lives while its tab is open
+  if (page === 'apps') startNetmonPolling();
+  else stopNetmonPolling();
 
   // dev-mode easter egg: 10 quick clicks on the settings tab
   if (page === 'settings') {
@@ -318,7 +441,7 @@ async function show(page) {
     case 'extension': await refreshBridge(); break;
     case 'logs': await refreshLogs(); break;
     case 'settings': renderSettings(); break;
-    case 'analysis': ensureAnalysis(); bindNetcheck(); break;
+    case 'analysis': await ensureAnalysis(); bindNetcheck(); break;
   }
 }
 
@@ -530,9 +653,13 @@ async function netmonToggle() {
   }
   await refreshNetmonOnce();
 }
+function netmonPollMs() {
+  const v = Number(state.config?.netmon?.poll_interval_ms);
+  return Number.isFinite(v) && v >= 200 ? v : 1200;
+}
 function startNetmonPolling() {
-  stopNetmonPolling();
-  state.netmonTimer = setInterval(() => refreshNetmonOnce().catch(() => {}), 1200);
+  stopNetmonPolling(); // guard against duplicate concurrent timers
+  state.netmonTimer = setInterval(() => refreshNetmonOnce().catch(() => {}), netmonPollMs());
 }
 function stopNetmonPolling() {
   if (state.netmonTimer) clearInterval(state.netmonTimer);
@@ -582,25 +709,68 @@ function renderNetmon() {
       </div>`).join('');
   }
 
-  // table
+  // table — incremental, keyed by pid+process+proto+remote
   const filter = state.netmonTableFilter.toLowerCase();
   const rows = state.netmonEntries.filter((e) =>
-    !filter || (e.process + ' ' + (e.remote || '') + ' ' + (e.host || '')).toLowerCase().includes(filter));
-  document.getElementById('netmon-count').textContent = `${rows.length} / ${state.netmonEntries.length}`;
+    !filter || (e.process + ' ' + (e.remote || '') + ' ' + (e.host || '')).toLowerCase().includes(filter)).slice(-300);
+  const countEl = document.getElementById('netmon-count');
+  const countText = `${rows.length} / ${state.netmonEntries.length}`;
+  if (countEl.textContent !== countText) countEl.textContent = countText;
+  renderNetmonTable(rows);
+}
+function netmonRowKey(e) {
+  return `${e.pid}|${e.process}|${e.proto}|${e.remote || e.local || ''}`;
+}
+function netmonRowData(e) {
+  return [e.process, String(e.pid), e.proto, e.remote || e.local || '', e.host || '', String(e.hits), e.host || e.remote_ip || ''];
+}
+let netmonRowEls = new Map();
+let netmonSnapshot = '';
+function renderNetmonTable(rows) {
+  // skip every DOM write while the serialized snapshot matches the previous one
+  const snapshot = rows.map((e) => netmonRowKey(e) + '\u0000' + netmonRowData(e).join('\u0001')).join('\u0002');
+  if (snapshot === netmonSnapshot) return;
+  netmonSnapshot = snapshot;
   const tbody = document.querySelector('#netmon-table tbody');
-  tbody.innerHTML = rows.slice(-300).map((e, i) => `
-    <tr>
-      <td>${esc(e.process)}</td>
-      <td>${e.pid}</td>
-      <td>${esc(e.proto)}</td>
-      <td>${esc(e.remote || e.local)}</td>
-      <td>${esc(e.host || '')}</td>
-      <td>${e.hits}</td>
-      <td>
-        <button class="btn ghost icon-only" title="${esc(t('netmon.add_bypass'))}" data-host="${esc(e.host || e.remote_ip || '')}" data-list="list-general">＋</button>
-        <button class="btn ghost icon-only" title="${esc(t('netmon.add_exclude'))}" data-host="${esc(e.host || e.remote_ip || '')}" data-list="list-exclude">－</button>
-      </td>
-    </tr>`).join('');
+  const used = new Set();
+  for (const e of rows) {
+    const key = netmonRowKey(e);
+    const data = netmonRowData(e);
+    used.add(key);
+    let tr = netmonRowEls.get(key);
+    if (!tr) {
+      tr = document.createElement('tr');
+      tr.dataset.key = key;
+      for (let i = 0; i < 6; i++) tr.appendChild(document.createElement('td'));
+      const actions = document.createElement('td');
+      const mk = (glyph, titleKey, listId) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn ghost icon-only';
+        b.textContent = glyph;
+        b.title = t(titleKey);
+        b.setAttribute('aria-label', t(titleKey));
+        b.dataset.list = listId;
+        return b;
+      };
+      actions.appendChild(mk('＋', 'netmon.add_bypass', 'list-general'));
+      actions.appendChild(mk('－', 'netmon.add_exclude', 'list-exclude'));
+      tr.appendChild(actions);
+      netmonRowEls.set(key, tr);
+    }
+    // patch only the changed cells
+    const cells = tr.children;
+    for (let i = 0; i < 6; i++) {
+      if (cells[i].textContent !== data[i]) cells[i].textContent = data[i];
+    }
+    for (const b of cells[6].querySelectorAll('button[data-host]')) {
+      if (b.dataset.host !== data[6]) b.dataset.host = data[6];
+    }
+    tbody.appendChild(tr); // keeps the row order in sync (moves existing nodes)
+  }
+  for (const [key, tr] of netmonRowEls) {
+    if (!used.has(key)) { tr.remove(); netmonRowEls.delete(key); }
+  }
 }
 document.getElementById('btn-netmon-toggle').onclick = () => netmonToggle().catch(() => {});
 document.getElementById('btn-netmon-csv').onclick = async () => {
@@ -837,9 +1007,16 @@ document.getElementById('btn-lists-replace').onclick = () => {
         label: t('common.apply'), kind: 'primary',
         onClick: async () => {
           const lines = document.getElementById('replace-area').value.split('\n');
-          closeModal();
-          await api('list_replace', { profileId: state.config.active_profile, listId: state.listId, lines });
-          await refreshLists();
+          // destructive: confirm first, then run with a busy state on the opener
+          confirmModal(t('lists.replace_confirm'), async () => {
+            await withBusy(document.getElementById('btn-lists-replace'), async () => {
+              try {
+                await api('list_replace', { profileId: state.config.active_profile, listId: state.listId, lines });
+                await refreshLists();
+                toast(t('common.success'), 'ok');
+              } catch { /* toasted by api() */ }
+            });
+          });
         },
       },
       { label: t('common.cancel') },
@@ -856,7 +1033,7 @@ async function refreshDiag() {
 function renderDiagSites() {
   document.getElementById('diag-sites-list').innerHTML = state.diagSites.map((s) => `
     <span class="chip">${esc(s.name)} <span class="muted">${esc(s.host)}:${s.port}</span>
-      ${s.id.startsWith('default') ? '' : `<span class="x" data-site="${esc(s.id)}">×</span>`}</span>`).join('');
+      ${s.id.startsWith('default') ? '' : `<span class="x" role="button" aria-label="${esc(t('common.close'))}" data-site="${esc(s.id)}">×</span>`}</span>`).join('');
   document.querySelectorAll('#diag-sites-list .x').forEach((x) => {
     x.onclick = async () => {
       state.diagSites = await api('diag_remove_site', { siteId: x.dataset.site });
@@ -948,10 +1125,12 @@ function renderBench() {
 }
 document.getElementById('btn-bench-start').onclick = async () => {
   const profileId = document.getElementById('bench-profile').value;
-  try {
-    await api('benchmark_start', { profileId });
-    await refreshBench();
-  } catch { /* toasted */ }
+  await withBusy(document.getElementById('btn-bench-start'), async () => {
+    try {
+      await api('benchmark_start', { profileId });
+      await refreshBench();
+    } catch { /* toasted */ }
+  });
 };
 document.getElementById('btn-bench-cancel').onclick = () => api('benchmark_cancel').catch(() => {});
 
@@ -965,15 +1144,25 @@ async function refreshPairing() {
   state.pairing = await api('bridge_pairing');
   renderBridge();
   clearInterval(state.pairingTimer);
-  state.pairingTimer = setInterval(async () => {
-    if (!state.pairing) return;
-    state.pairing.expires_in -= 1;
-    if (state.pairing.expires_in <= 0 && state.page === 'extension') await refreshPairing();
-    else {
-      const el = document.getElementById('pairing-expires');
-      if (el && state.pairing) el.textContent = t('extension.expires_in', { seconds: state.pairing.expires_in });
+  state.pairingTimer = setInterval(() => {
+    const p = state.pairing;
+    if (!p) { clearInterval(state.pairingTimer); state.pairingTimer = null; return; }
+    if (p.expires_in > 0) p.expires_in -= 1; // clamp at 0 — never negative
+    const el = document.getElementById('pairing-expires');
+    if (el) el.textContent = t('extension.expires_in', { seconds: p.expires_in });
+    updatePairButtons();
+    if (p.expires_in <= 0) {
+      clearInterval(state.pairingTimer);
+      state.pairingTimer = null;
+      if (state.page === 'extension') refreshPairing().catch(() => {});
     }
   }, 1000);
+}
+/** the pair button stays disabled while there is no valid (unexpired) code */
+function updatePairButtons() {
+  const valid = !!state.pairing && state.pairing.expires_in > 0;
+  const copyBtn = document.getElementById('btn-pair-copy');
+  if (copyBtn) copyBtn.disabled = !valid;
 }
 function renderBridge() {
   const bridge = state.bridge || { running: false, port: 0 };
@@ -991,25 +1180,30 @@ function renderBridge() {
     document.getElementById('pairing-code').textContent = state.pairing.code;
     document.getElementById('pairing-expires').textContent = t('extension.expires_in', { seconds: state.pairing.expires_in });
   }
+  updatePairButtons();
   document.getElementById('bridge-instructions').textContent = t('extension.instructions');
 }
 document.getElementById('btn-bridge-toggle').onclick = async () => {
-  try {
-    if (state.bridge?.running) {
-      await api('bridge_stop');
-      state.pairing = null;
-    } else {
-      await api('bridge_start');
-    }
-    await refreshBridge();
-  } catch { /* toasted */ }
+  await withBusy(document.getElementById('btn-bridge-toggle'), async () => {
+    try {
+      if (state.bridge?.running) {
+        await api('bridge_stop');
+        state.pairing = null;
+      } else {
+        await api('bridge_start');
+      }
+      await refreshBridge();
+    } catch { /* toasted */ }
+  });
 };
 document.getElementById('btn-pair-regen').onclick = async () => {
-  try {
-    state.pairing = await api('bridge_regenerate_code');
-    renderBridge();
-    toast(t('extension.code_regenerated'), 'ok', 1400);
-  } catch { /* toasted */ }
+  await withBusy(document.getElementById('btn-pair-regen'), async () => {
+    try {
+      state.pairing = await api('bridge_regenerate_code');
+      renderBridge();
+      toast(t('extension.code_regenerated'), 'ok', 1400);
+    } catch { /* toasted */ }
+  });
 };
 async function copyToClipboard(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
@@ -1033,28 +1227,53 @@ document.getElementById('btn-pair-copy').onclick = async () => {
 
 /* ═══ LOGS ═══ */
 const LOG_LEVELS = ['ALL', 'DEBUG', 'INFO', 'SUCCESS', 'WARN', 'ERROR'];
+const LOG_LIMIT = 500;
 async function refreshLogs() {
   state.logs = await api('logs_snapshot', { limit: 400, level: state.logLevel });
   renderLogFilters();
   renderLogs();
 }
 function renderLogFilters() {
+  // clicks are handled by the single delegated listener below — no per-button
+  // onclick here (it used to trigger refreshLogs twice per click)
   const box = document.getElementById('logs-levels');
-  box.innerHTML = LOG_LEVELS.map((l) => `<button data-level="${l}" class="${l === state.logLevel ? 'active' : ''}">${l}</button>`).join('');
-  box.querySelectorAll('button').forEach((b) => {
-    b.onclick = async () => { state.logLevel = b.dataset.level; await refreshLogs(); };
-  });
+  box.innerHTML = LOG_LEVELS.map((l) => `<button type="button" data-level="${l}" class="${l === state.logLevel ? 'active' : ''}">${l}</button>`).join('');
 }
+function logLineHtml(entry) {
+  return `<div class="log-line l-${esc(entry.level)}">
+    <span class="ts">${esc(new Date(entry.ts).toLocaleTimeString())}</span>
+    <span class="lvl">[${esc(entry.level)}]</span>
+    <span class="src">[${esc(entry.source)}]</span>
+    ${esc(entry.message)}
+  </div>`;
+}
+function logsStickToBottom(box) {
+  return document.getElementById('logs-autoscroll').checked &&
+    box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+}
+/** full rebuild — only on refresh (filter change / tab enter) or clear */
 function renderLogs() {
   const box = document.getElementById('logs-list');
-  box.innerHTML = state.logs.map((entry) => `
-    <div class="log-line l-${esc(entry.level)}">
-      <span class="ts">${esc(new Date(entry.ts).toLocaleTimeString())}</span>
-      <span class="lvl">[${esc(entry.level)}]</span>
-      <span class="src">[${esc(entry.source)}]</span>
-      ${esc(entry.message)}
-    </div>`).join('') || `<div class="log-line muted">${esc(t('logs.empty'))}</div>`;
+  box.innerHTML = state.logs.map(logLineHtml).join('') || `<div class="log-line muted">${esc(t('logs.empty'))}</div>`;
+  logRendered = state.logs.length;
   if (document.getElementById('logs-autoscroll').checked) box.scrollTop = box.scrollHeight;
+}
+let logRendered = 0; // how many entries of state.logs are already in the DOM
+/** live path: append the new entry, trim overflow beyond the limit from the top */
+function appendLogEntry(entry) {
+  const box = document.getElementById('logs-list');
+  const stick = logsStickToBottom(box); // autoscroll only if already at the bottom
+  const placeholder = box.querySelector('.log-line.muted');
+  if (placeholder) placeholder.remove();
+  box.insertAdjacentHTML('beforeend', logLineHtml(entry));
+  logRendered += 1;
+  const lines = box.querySelectorAll('.log-line');
+  const overflow = lines.length - LOG_LIMIT;
+  if (overflow > 0) {
+    for (let i = 0; i < overflow; i++) lines[i].remove();
+    logRendered -= overflow;
+  }
+  if (stick) box.scrollTop = box.scrollHeight;
 }
 document.getElementById('btn-logs-clear').onclick = async () => { await api('logs_clear'); state.logs = []; renderLogs(); };
 document.getElementById('btn-logs-export').onclick = async () => {
@@ -1075,14 +1294,14 @@ function colorRow(key, value) {
     <div class="color-row">
       <input type="color" value="${value || '#888888'}" data-color="${key}" ${value ? '' : 'disabled'} />
       <span class="grow">${esc(t('theme.color_' + key))}</span>
-      <span class="reset" data-reset="${key}" title="↺">↺</span>
+      <span class="reset" role="button" aria-label="${esc(t('theme.reset'))}" data-reset="${key}" title="↺">↺</span>
     </div>`;
 }
 async function renderSettings() {
   const cfg = state.config;
   const presets = (cfg.theme_presets || []).map((p) => `
     <span class="chip preset-chip ${cfg.theme === 'preset:' + p.id ? 'active' : ''}" data-preset="${p.id}" title="${esc(t('theme.apply'))}">
-      ${esc(p.name)}<span class="x" data-del-preset="${p.id}">×</span></span>`).join('');
+      ${esc(p.name)}<span class="x" role="button" aria-label="${esc(t('common.close'))}" data-del-preset="${p.id}">×</span></span>`).join('');
 
   const info = await api('app_info');
   const taskbar = cfg.taskbar;
@@ -1226,9 +1445,10 @@ async function ensureAnalysis() {
     const r = await fetch('analysis-content.html');
     if (!r.ok) throw new Error(r.status);
     body.innerHTML = await r.text();
+    applyI18n(body); // translate the freshly injected document
     analysisLoaded = true;
   } catch (_) {
-    body.innerHTML = '<div class="card"><p class="muted">Не удалось загрузить полный анализ.</p></div>';
+    body.innerHTML = `<div class="card"><p class="muted">${esc(t('analysis.load_failed'))}</p></div>`;
   }
 }
 
@@ -1240,11 +1460,11 @@ function bindNetcheck() {
   btn.onclick = async () => {
     const st = document.getElementById('netcheck-state');
     const box = document.getElementById('netcheck-results');
-    st.textContent = 'Проверка… до 30 секунд';
+    st.textContent = t('analysis.check_running');
     box.innerHTML = '';
     try {
       const r = await api('netcheck_run');
-      st.textContent = `Вердикт: ${r.verdict}`;
+      st.textContent = t('analysis.verdict_label', { verdict: r.verdict });
       box.innerHTML = r.probes.map((p) => `
         <div class="settings-row">
           <span class="label">${esc(p.name)}</span>
@@ -1252,7 +1472,7 @@ function bindNetcheck() {
           <span class="muted small">${esc(p.detail)}</span>
         </div>`).join('') + `<p class="muted small mt-8">${esc(r.tip)}</p>`;
     } catch (e) {
-      st.textContent = 'Ошибка: ' + (e.message || e);
+      st.textContent = t('analysis.error_label', { error: e?.message || e });
     }
   };
 }
@@ -1463,11 +1683,17 @@ function bindSettings(info) {
   document.querySelectorAll('[data-del-preset]').forEach((x) => {
     x.onclick = async (e) => {
       e.stopPropagation();
-      await api('theme_delete_preset', { presetId: x.dataset.delPreset });
-      state.config = await api('get_config');
-      await applyTheme();
-      renderSettings();
-      toast(t('theme.preset_deleted'), 'info');
+      const preset = presetById(x.dataset.delPreset);
+      // destructive: confirm before deleting a saved theme preset
+      confirmModal(t('theme.preset_delete_confirm', { name: preset?.name || x.dataset.delPreset }), async () => {
+        try {
+          await api('theme_delete_preset', { presetId: x.dataset.delPreset });
+          state.config = await api('get_config');
+          await applyTheme();
+          renderSettings();
+          toast(t('theme.preset_deleted'), 'info');
+        } catch { /* toasted */ }
+      });
     };
   });
   $('btn-save-preset').onclick = async () => {
@@ -1573,18 +1799,24 @@ async function checkUpdates() {
   }
 }
 async function installUpdate() {
-  if (state.maintBusy || !state.release?.download_url) return;
+  if (state.maintBusy || !state.release?.version) return;
   const profileId = state.config.active_profile;
   if (!profileId) return;
   state.maintBusy = true;
   const bar = document.getElementById('maint-progress');
   bar.hidden = false;
   bar.querySelector('.progress-fill').style.width = '0%';
-  try {
-    await api('zapret_install_update', { profileId, version: state.release.version, url: state.release.download_url });
-  } finally {
-    state.maintBusy = false;
-  }
+  // contract C1: the backend now accepts only the version (no url argument)
+  await withBusy(document.getElementById('btn-maint-install'), async () => {
+    try {
+      await api('zapret_install_update', { version: state.release.version });
+    } catch (e) {
+      toast(t('maint.network_error', { error: e?.message || String(e) }), 'err');
+      bar.hidden = true;
+    } finally {
+      state.maintBusy = false;
+    }
+  });
 }
 
 /* ═══ ROBLOX DNS ═══ */
@@ -1655,8 +1887,8 @@ function renderDnsBench() {
       <input type="radio" name="dns-pick" value="${i}" ${r.score === top ? 'checked' : ''} />
       <span class="dns-name">${esc(r.name)}</span>
       <span class="muted small">${esc(r.primary)} · ${esc(r.secondary)}</span>
-      <span class="dns-metric">${r.rtt_ms != null ? Math.round(r.rtt_ms) + ' мс' : '—'}</span>
-      <span class="dns-metric">${r.resolve_ms != null ? Math.round(r.resolve_ms) + ' мс' : '—'}</span>
+      <span class="dns-metric">${r.rtt_ms != null ? t('diag.latency_ms', { ms: Math.round(r.rtt_ms) }) : '—'}</span>
+      <span class="dns-metric">${r.resolve_ms != null ? t('diag.latency_ms', { ms: Math.round(r.resolve_ms) }) : '—'}</span>
       <span class="dns-metric">${Math.round(r.success_rate * 100)}%</span>
       <span class="dns-metric">${r.roblox_ok ? '✓' : '✕'}</span>
       <span class="dns-score">${r.score.toFixed(1)}${r.score === top ? ' ★' : ''}</span>
@@ -1667,11 +1899,13 @@ async function applyDns() {
   if (!sel) { toast(t('dns.pick_hint'), 'warn'); return; }
   const r = state.dnsBench[+sel.value];
   const useDoh = document.getElementById('dns-doh')?.checked ?? false;
-  try {
-    await api('dns_apply', { primary: r.primary, secondary: r.secondary, use_doh: useDoh });
-    toast(t('dns.applied', { name: r.name, primary: r.primary }), 'ok');
-    refreshDnsStatus();
-  } catch { /* toasted */ }
+  await withBusy(document.getElementById('btn-dns-apply'), async () => {
+    try {
+      await api('dns_apply', { primary: r.primary, secondary: r.secondary, use_doh: useDoh });
+      toast(t('dns.applied', { name: r.name, primary: r.primary }), 'ok');
+      refreshDnsStatus();
+    } catch { /* toasted */ }
+  });
 }
 async function resetDns() {
   confirmModal(t('dns.reset_confirm'), async () => {
@@ -1708,17 +1942,19 @@ function renderRbx() {
   box.innerHTML = state.rbxCands.map((c, i) => `
     <div class="dns-row">
       <span class="dns-name">${esc(c.ip)}</span>
-      <span class="dns-metric">${Math.round(c.rtt_ms)} мс</span>
-      <button class="btn ghost" data-rbx-apply="${i}">${esc(t('dns.hosts_apply'))}</button>
+      <span class="dns-metric">${t('diag.latency_ms', { ms: Math.round(c.rtt_ms) })}</span>
+      <button type="button" class="btn ghost" data-rbx-apply="${i}">${esc(t('dns.hosts_apply'))}</button>
     </div>`).join('');
   box.querySelectorAll('[data-rbx-apply]').forEach((b) => {
     b.onclick = async () => {
       const c = state.rbxCands[+b.dataset.rbxApply];
-      try {
-        await api('roblox_hosts_apply', { ip: c.ip });
-        toast(t('dns.hosts_done', { ip: c.ip }), 'ok');
-        refreshRbxState();
-      } catch { /* toasted */ }
+      await withBusy(b, async () => {
+        try {
+          await api('roblox_hosts_apply', { ip: c.ip });
+          toast(t('dns.hosts_done', { ip: c.ip }), 'ok');
+          refreshRbxState();
+        } catch { /* toasted */ }
+      });
     };
   });
 }
@@ -1731,11 +1967,13 @@ async function refreshRbxState() {
 }
 async function revertRbx() {
   confirmModal(t('dns.hosts_revert_confirm'), async () => {
-    try {
-      await api('roblox_hosts_revert');
-      toast(t('dns.hosts_reverted'), 'ok');
-      refreshRbxState();
-    } catch { /* toasted */ }
+    await withBusy(document.getElementById('btn-rbx-revert'), async () => {
+      try {
+        await api('roblox_hosts_revert');
+        toast(t('dns.hosts_reverted'), 'ok');
+        refreshRbxState();
+      } catch { /* toasted */ }
+    });
   }, true);
 }
 function bindDns() {
@@ -1806,20 +2044,30 @@ function renderTg() {
   if (dirHint) dirHint.hidden = s.exists;
 }
 async function startTg() {
-  const port = parseInt(document.getElementById('tg-port')?.value || '1443', 10) || 1443;
-  const secret = (document.getElementById('tg-secret')?.textContent || '').trim();
-  try {
-    await api('tgproxy_start', { port, secret: secret || null });
-    toast(t('tgproxy.started'), 'ok');
-    await refreshTg();
-  } catch { /* toasted */ }
+  const raw = document.getElementById('tg-port')?.value ?? '';
+  const port = Number.parseInt(raw, 10);
+  const errEl = document.getElementById('tg-port-error');
+  const valid = Number.isInteger(port) && port >= 1 && port <= 65535;
+  if (errEl) errEl.hidden = valid;
+  if (!valid) { toast(t('common.port_invalid'), 'warn'); return; }
+  await withBusy(document.getElementById('btn-tg-start'), async () => {
+    try {
+      // contract C2: the UI sends only the port. The secret is generated and
+      // kept by the backend; the UI renders it exclusively from tgproxy_status.
+      await api('tgproxy_start', { port });
+      toast(t('tgproxy.started'), 'ok');
+      await refreshTg();
+    } catch { /* toasted */ }
+  });
 }
 async function stopTg() {
-  try {
-    await api('tgproxy_stop');
-    toast(t('tgproxy.stopped'), 'info');
-    await refreshTg();
-  } catch { /* toasted */ }
+  await withBusy(document.getElementById('btn-tg-stop'), async () => {
+    try {
+      await api('tgproxy_stop');
+      toast(t('tgproxy.stopped'), 'info');
+      await refreshTg();
+    } catch { /* toasted */ }
+  });
 }
 async function setupTg() {
   try {
@@ -1899,7 +2147,11 @@ function bindTg() {
   }
   const portEl = document.getElementById('tg-port');
   if (portEl) {
-    portEl.addEventListener('input', () => { portEl.dataset.userEdited = '1'; });
+    portEl.addEventListener('input', () => {
+      portEl.dataset.userEdited = '1';
+      const errEl = document.getElementById('tg-port-error');
+      if (errEl) errEl.hidden = true;
+    });
   }
 }
 
@@ -1925,8 +2177,8 @@ async function bindEvents() {
       const levelsMatch = state.logLevel === 'ALL' || entry.level === state.logLevel;
       if (levelsMatch) {
         state.logs.push(entry);
-        if (state.logs.length > 500) state.logs.shift();
-        renderLogs();
+        if (state.logs.length > LOG_LIMIT) state.logs.shift();
+        appendLogEntry(entry);
       }
     }
   });
@@ -1999,9 +2251,10 @@ async function openSetup() {
       const act = b.dataset.setupAct;
       try {
         if (act === 'webview2') {
-          await api('open_in_explorer', { path: 'https://go.microsoft.com/fwlink/?linkid=2124701' });
+          // contract C3: external http(s) links go through open_url
+          await api('open_url', { url: 'https://go.microsoft.com/fwlink/?linkid=2124701' });
         } else if (act === 'vcredist') {
-          await api('open_in_explorer', { path: 'https://aka.ms/vs/17/release/vc_redist.x64.exe' });
+          await api('open_url', { url: 'https://aka.ms/vs/17/release/vc_redist.x64.exe' });
         } else if (act === 'admin') {
           await api('relaunch_as_admin');
         } else if (act === 'zapret') {

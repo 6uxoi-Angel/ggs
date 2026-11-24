@@ -68,20 +68,30 @@ pub fn normalize_host(raw: &str, allow_ip: bool) -> Result<String, DomainError> 
     let authority = authority.split(['/', '?', '#']).next().unwrap_or(authority);
 
     let host = if let Some(rest) = authority.strip_prefix('[') {
-        // IPv6 literal: [::1]:443
+        // Bracketed IPv6 literal: [::1] or [::1]:443 — drop the brackets and
+        // any :port part after the closing bracket.
         match rest.find(']') {
             Some(idx) => &rest[..idx],
             None => return Err(DomainError::CannotParse),
         }
+    } else if authority.matches(':').count() > 1 {
+        // Bare (non-bracketed) IPv6 literal such as `fe80::1`: it contains
+        // several colons, so none of them can be a port separator — keep the
+        // whole remainder untouched (only trimmed/lowercased below).
+        authority
     } else {
-        // Strip :port from host:port (only one colon allowed outside brackets).
-        match authority.rsplit_once(':') {
-            Some((maybe_host, port))
-                if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) =>
-            {
-                maybe_host
-            }
-            _ => authority,
+        // Single colon: either host:port or a bare trailing colon (empty
+        // port) — never part of a valid host name.
+        match authority.strip_suffix(':') {
+            Some(host) => host,
+            None => match authority.rsplit_once(':') {
+                Some((maybe_host, port))
+                    if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) =>
+                {
+                    maybe_host
+                }
+                _ => authority,
+            },
         }
     };
 
@@ -203,6 +213,33 @@ mod tests {
             normalize_host("1.2.3.4", false),
             Err(DomainError::IpNotAllowed)
         );
+    }
+
+    #[test]
+    fn bare_ipv6_and_trailing_colon() {
+        // Regression: a bare (non-bracketed) IPv6 literal must never be split
+        // at a colon as if the tail were a port.
+        assert_eq!(normalize_host("fe80::1", true).unwrap(), "fe80::1");
+        assert_eq!(normalize_host("2001:DB8::8", true).unwrap(), "2001:db8::8");
+        assert_eq!(
+            normalize_host("fe80::1", false),
+            Err(DomainError::IpNotAllowed)
+        );
+        assert_eq!(normalize_host("[fe80::1]:443", true).unwrap(), "fe80::1");
+
+        // Regression: a bare trailing colon is an empty port, not part of
+        // the host.
+        assert_eq!(
+            normalize_host("example.com:", false).unwrap(),
+            "example.com"
+        );
+
+        // Regular host:port and IPv4:port behavior is unchanged.
+        assert_eq!(
+            normalize_host("example.com:8443", false).unwrap(),
+            "example.com"
+        );
+        assert_eq!(normalize_host("127.0.0.1:80", true).unwrap(), "127.0.0.1");
     }
 
     #[test]

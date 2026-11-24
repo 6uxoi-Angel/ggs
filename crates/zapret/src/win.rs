@@ -3,18 +3,21 @@
 //! Everything here is `cfg(windows)`; the manager falls back to
 //! `ZapretError::WindowsOnly` on other platforms.
 
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use windows::core::PWSTR;
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::{
+    CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, TerminateProcess, PROCESS_QUERY_INFORMATION,
-    PROCESS_TERMINATE,
+    GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, TerminateProcess,
+    WaitForSingleObject, PROCESS_NAME_WIN32, PROCESS_QUERY_INFORMATION,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
 };
 
 use crate::ZapretError;
@@ -75,13 +78,111 @@ pub fn process_alive(pid: u32) -> bool {
     enumerate_processes().iter().any(|p| p.pid == pid)
 }
 
-pub fn terminate(pid: u32) -> Result<(), ZapretError> {
-    unsafe {
-        let handle = OpenProcess(PROCESS_TERMINATE, false, pid)
-            .map_err(|e| ZapretError::StopPartial(e.to_string()))?;
-        let result = TerminateProcess(handle, 1);
-        let _ = CloseHandle(handle);
-        result.map_err(|e| ZapretError::StopPartial(e.to_string()))
+/// A process we hold an open OS handle to.
+///
+/// Termination and liveness checks go through the handle instead of the raw
+/// PID, so a recycled PID can never make us kill or misreport an unrelated
+/// process. All handles are owned (spawned children are duplicated via
+/// `DuplicateHandle`), and `Drop` closes the handle.
+pub struct OwnedProcess {
+    pid: u32,
+    handle: isize,
+}
+
+impl OwnedProcess {
+    /// Take ownership of a spawned child's process handle. The handle is
+    /// duplicated, so the `Child` may outlive or predecease this value.
+    pub fn from_child(child: &Child) -> Option<OwnedProcess> {
+        use std::os::windows::io::AsRawHandle;
+        let mut duplicated = HANDLE::default();
+        unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                HANDLE(child.as_raw_handle()),
+                GetCurrentProcess(),
+                &mut duplicated,
+                0,
+                false.into(),
+                DUPLICATE_SAME_ACCESS,
+            )
+            .ok()?;
+        }
+        Some(Self {
+            pid: child.id(),
+            handle: duplicated.0 as isize,
+        })
+    }
+
+    /// Open an existing process by PID (discovered winws children, orphans).
+    /// `None` when the process is gone or the handle cannot be opened.
+    pub fn from_pid(pid: u32) -> Option<OwnedProcess> {
+        unsafe {
+            let handle = OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
+                false,
+                pid,
+            )
+            .ok()?;
+            Some(Self {
+                pid,
+                handle: handle.0 as isize,
+            })
+        }
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    fn handle(&self) -> HANDLE {
+        HANDLE(self.handle as *mut std::ffi::c_void)
+    }
+
+    /// True while the process is still running (`WaitForSingleObject`, 0 ms).
+    pub fn is_running(&self) -> bool {
+        unsafe { WaitForSingleObject(self.handle(), 0) == WAIT_TIMEOUT }
+    }
+
+    /// Terminate with exit code 1 and wait up to 5 s for the exit.
+    /// Returns false when the process could not be confirmed dead.
+    pub fn terminate(&self) -> bool {
+        unsafe {
+            // "already exited" races are non-fatal: the bounded wait below
+            // decides the outcome.
+            let _ = TerminateProcess(self.handle(), 1);
+            WaitForSingleObject(self.handle(), 5000) == WAIT_OBJECT_0
+        }
+    }
+
+    /// Case-insensitive check that the opened process image contains
+    /// `needle` (e.g. `winws.exe`) — a last guard against PID reuse for
+    /// handles that came from [`OwnedProcess::from_pid`].
+    pub fn matches_image(&self, needle: &str) -> bool {
+        let mut buf = [0u16; 1024];
+        let mut size = buf.len() as u32;
+        unsafe {
+            if QueryFullProcessImageNameW(
+                self.handle(),
+                PROCESS_NAME_WIN32,
+                PWSTR(buf.as_mut_ptr()),
+                &mut size,
+            )
+            .is_err()
+            {
+                return false;
+            }
+        }
+        let len = (size as usize).min(buf.len());
+        let image = String::from_utf16_lossy(&buf[..len]);
+        image.to_lowercase().contains(&needle.to_lowercase())
+    }
+}
+
+impl Drop for OwnedProcess {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.handle());
+        }
     }
 }
 
@@ -200,23 +301,71 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
     })
 }
 
-/// Query the `zapret` Windows service: (installed, running).
-pub fn query_service() -> (bool, bool) {
-    let output = run_hidden(
+/// Lifecycle state of a Windows service as reported by `sc query`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceState {
+    /// Output could not be parsed (or the service is absent) — never guess.
+    Unknown,
+    Stopped,
+    StartPending,
+    StopPending,
+    Running,
+    PausePending,
+    Paused,
+}
+
+/// Parse the `STATE : <code> <WORD>` line of `sc query` output.
+///
+/// The state WORD after the numeric code decides the result; the code alone
+/// is never trusted (a naive `contains("4")` also matched PIDs, dates and
+/// byte offsets elsewhere in the output). The label word itself is localized
+/// on non-English Windows (`СОСТОЯНИЕ` on RU builds), so instead of keying on
+/// the literal `STATE` we scan every `label : <code> <WORD>` line and accept
+/// only a known state token. Unparsable output maps to
+/// [`ServiceState::Unknown`], never to a guessed running/stopped value.
+fn parse_sc_query_state(stdout: &str) -> ServiceState {
+    for line in stdout.lines() {
+        let Some(colon) = line.find(':') else {
+            continue;
+        };
+        let mut tokens = line[colon + 1..].split_whitespace();
+        let _code = tokens.next(); // "4", "2", ... — deliberately ignored
+        let Some(word) = tokens.next() else {
+            continue;
+        };
+        match word.to_ascii_uppercase().as_str() {
+            "RUNNING" => return ServiceState::Running,
+            "STOPPED" => return ServiceState::Stopped,
+            "START_PENDING" => return ServiceState::StartPending,
+            "STOP_PENDING" => return ServiceState::StopPending,
+            "PAUSE_PENDING" => return ServiceState::PausePending,
+            "PAUSED" => return ServiceState::Paused,
+            _ => continue,
+        }
+    }
+    ServiceState::Unknown
+}
+
+/// Query a Windows service by name: (installed, [`ServiceState`]).
+pub fn query_service_ex(service: &str) -> (bool, ServiceState) {
+    let Ok(output) = run_hidden(
         "sc",
-        &["query", "zapret"],
+        &["query", service],
         None,
         None,
         Duration::from_secs(4),
-    );
-    let Ok(output) = output else {
-        return (false, false);
+    ) else {
+        return (false, ServiceState::Unknown);
     };
-    let stdout = output.stdout.to_uppercase();
-    let installed = output.code == 0 && stdout.contains("SERVICE_NAME");
-    let running =
-        installed && stdout.contains("STATE") && stdout.contains("4") && stdout.contains("RUNNING");
-    (installed, running)
+    let state = parse_sc_query_state(&output.stdout);
+    let installed = output.code == 0 && state != ServiceState::Unknown;
+    (installed, state)
+}
+
+/// Query the `zapret` Windows service: (installed, running).
+pub fn query_service() -> (bool, bool) {
+    let (installed, state) = query_service_ex("zapret");
+    (installed, state == ServiceState::Running)
 }
 
 /// `sc stop/delete` a service, ignoring "not installed" errors.
@@ -224,16 +373,6 @@ pub fn sc(action: &str, service: &str) {
     let _ = run_hidden(
         "sc",
         &[action, service],
-        None,
-        None,
-        Duration::from_secs(20),
-    );
-}
-
-pub fn taskkill_image(image: &str) {
-    let _ = run_hidden(
-        "taskkill",
-        &["/IM", image, "/F"],
         None,
         None,
         Duration::from_secs(20),
@@ -250,3 +389,52 @@ fn _pwstr_marker(s: &mut [u16]) -> PWSTR {
 #[allow(dead_code)]
 const _QUERY_INFO: windows::Win32::System::Threading::PROCESS_ACCESS_RIGHTS =
     PROCESS_QUERY_INFORMATION;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sc_query_state_parsed_from_word_not_code() {
+        assert_eq!(
+            parse_sc_query_state("SERVICE_NAME zapret\r\n        TYPE               : 10  WIN32_OWN_PROCESS\r\n        STATE              : 4  RUNNING\r\n        PID                4242"),
+            ServiceState::Running
+        );
+        assert_eq!(
+            parse_sc_query_state("\n        STATE              : 1  STOPPED\n"),
+            ServiceState::Stopped
+        );
+        // Pending / paused states are explicit non-running variants.
+        assert_eq!(
+            parse_sc_query_state("STATE              : 2  START_PENDING"),
+            ServiceState::StartPending
+        );
+        assert_eq!(
+            parse_sc_query_state("STATE              : 7  PAUSED"),
+            ServiceState::Paused
+        );
+        // The state label is localized on non-English Windows; the state
+        // WORD stays English — parsing must still work.
+        assert_eq!(
+            parse_sc_query_state(
+                "ИМЯ_СЛУЖБЫ: zapret\n        ТИП               : 10  WIN32_OWN_PROCESS  \n        СОСТОЯНИЕ         : 4  RUNNING\n"
+            ),
+            ServiceState::Running
+        );
+        // Unparsable output must never look like a known state.
+        assert_eq!(parse_sc_query_state("no state here"), ServiceState::Unknown);
+        assert_eq!(
+            parse_sc_query_state("STATE    garbage"),
+            ServiceState::Unknown
+        );
+        assert_eq!(
+            parse_sc_query_state("STATE : 99 WHAT"),
+            ServiceState::Unknown
+        );
+        // A stray "4" elsewhere in the output must not decide the result.
+        assert_eq!(
+            parse_sc_query_state("PID                4\n"),
+            ServiceState::Unknown
+        );
+    }
+}

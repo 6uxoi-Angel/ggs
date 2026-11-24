@@ -10,7 +10,7 @@ mod win;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -29,6 +29,7 @@ use integra_netmon::{Netmon, ProcessFilter, TrackerConfig};
 use integra_zapret::{ManagerEvent, Status, ZapretError, ZapretManager};
 
 use base64::Engine as _;
+use sha2::Digest as _;
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -116,6 +117,9 @@ pub struct AppState {
     pub netmon: Arc<Netmon>,
     pub bridge: Arc<BridgeServer>,
     pub benchmark: Mutex<Option<Arc<benchmark::Benchmark>>>,
+    /// Start-claim for the benchmark: set atomically when a run is accepted,
+    /// cleared by benchmark.rs on every exit path (see `BenchmarkClaim`).
+    pub benchmark_claim: Arc<AtomicBool>,
     pub tgproxy: Arc<Mutex<tgproxy::TgProxyInner>>,
 }
 
@@ -131,8 +135,38 @@ impl Clone for AppState {
             netmon: self.netmon.clone(),
             bridge: self.bridge.clone(),
             benchmark: Mutex::new(self.benchmark.lock().clone()),
+            benchmark_claim: self.benchmark_claim.clone(),
             tgproxy: self.tgproxy.clone(),
         }
+    }
+}
+
+/// Benchmark start-claim guard: claims the flag with `compare_exchange` and
+/// clears it on drop unless explicitly kept (`keep`) after a successful
+/// spawn — afterwards benchmark.rs owns the flag and clears it on every
+/// exit path, including panics.
+struct BenchmarkClaim(Arc<AtomicBool>);
+
+impl BenchmarkClaim {
+    fn try_claim(flag: &Arc<AtomicBool>) -> Result<Self, CommandError> {
+        flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| CommandError::key("bench.running"))?;
+        Ok(BenchmarkClaim(flag.clone()))
+    }
+
+    fn flag(&self) -> Arc<AtomicBool> {
+        self.0.clone()
+    }
+
+    /// Hand the claim over to the running benchmark (no drop-clear).
+    fn keep(self) {
+        std::mem::forget(self);
+    }
+}
+
+impl Drop for BenchmarkClaim {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
     }
 }
 
@@ -356,6 +390,24 @@ async fn update_settings(
             "bridge",
             tr_with("bridge.started", &[("port", &port.to_string())]),
         );
+    } else if patch.bridge_enabled == Some(false) {
+        // Disabling the bridge must actually stop a running server. The
+        // stop is idempotent: disabling while already stopped is a no-op.
+        state.bridge.stop();
+        state.log(
+            LogLevel::Info,
+            "bridge",
+            integra_core::i18n::tr("bridge.log_stopped"),
+        );
+    } else if patch.bridge_enabled == Some(true) && !state.bridge.is_running() {
+        match state.bridge.start() {
+            Ok(port) => state.log(
+                LogLevel::Success,
+                "bridge",
+                tr_with("bridge.started", &[("port", &port.to_string())]),
+            ),
+            Err(err) => state.log(LogLevel::Warn, "bridge", err),
+        }
     }
     Ok(state.config.get())
 }
@@ -439,33 +491,41 @@ fn webview2_present() -> bool {
 
 /// Check every component Integra needs; a missing item gets an action in UI.
 #[tauri::command]
-fn system_check(state: tauri::State<'_, AppState>) -> Result<Vec<ComponentStatus>, CommandError> {
-    let mut out = Vec::new();
-    out.push(ComponentStatus {
-        id: "webview2".into(),
-        ok: webview2_present(),
-        detail: None,
-    });
-    out.push(ComponentStatus {
-        id: "vcredist".into(),
-        ok: Path::new(r"C:\Windows\System32\VCRUNTIME140.dll").exists(),
-        detail: None,
-    });
-    let admin = win::is_admin();
-    out.push(ComponentStatus {
-        id: "admin".into(),
-        ok: admin,
-        detail: None,
-    });
-    let profiles = state.config.get().profiles;
-    out.push(ComponentStatus {
-        id: "zapret".into(),
-        ok: !profiles.is_empty(),
-        detail: profiles
-            .first()
-            .map(|p| p.path.to_string_lossy().into_owned()),
-    });
-    Ok(out)
+async fn system_check(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ComponentStatus>, CommandError> {
+    // `net session` / filesystem probes are blocking — run them pooled.
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out = Vec::new();
+        out.push(ComponentStatus {
+            id: "webview2".into(),
+            ok: webview2_present(),
+            detail: None,
+        });
+        out.push(ComponentStatus {
+            id: "vcredist".into(),
+            ok: Path::new(r"C:\Windows\System32\VCRUNTIME140.dll").exists(),
+            detail: None,
+        });
+        let admin = win::is_admin();
+        out.push(ComponentStatus {
+            id: "admin".into(),
+            ok: admin,
+            detail: None,
+        });
+        let profiles = state.config.get().profiles;
+        out.push(ComponentStatus {
+            id: "zapret".into(),
+            ok: !profiles.is_empty(),
+            detail: profiles
+                .first()
+                .map(|p| p.path.to_string_lossy().into_owned()),
+        });
+        Ok(out)
+    })
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 /// Mark the first-run check as acknowledged (stored in config).
@@ -589,8 +649,11 @@ async fn remove_profile(
             c.active_profile = c.profiles.first().map(|p| p.id.clone());
         }
     })?;
-    if let Some(manager) = state.managers.lock().remove(&profile_id) {
-        let _ = manager.stop();
+    let manager = state.managers.lock().remove(&profile_id);
+    if let Some(manager) = manager {
+        // manager.stop() waits on child-process termination: blocking — run
+        // it off the async runtime thread like the other profile commands.
+        let _ = tauri::async_runtime::spawn_blocking(move || manager.stop()).await;
     }
     let name = removed.map(|p| p.name).unwrap_or_default();
     state.log(
@@ -629,19 +692,25 @@ async fn start_profile(
     profile_id: String,
     strategy: Option<String>,
 ) -> Result<u32, CommandError> {
-    let profile = state.profile(&profile_id)?;
-    let manager = state.ensure_manager(&profile_id)?;
-    let strategy_file = strategy.unwrap_or_else(|| profile.selected_strategy.clone());
-    let pid = manager.start(&strategy_file).map_err(CommandError::from)?;
-    state
-        .config
-        .update(|c| {
-            if let Some(slot) = c.profiles.iter_mut().find(|p| p.id == profile_id) {
-                slot.selected_strategy = strategy_file.clone();
-            }
-        })
-        .map_err(|e| CommandError::raw(e.to_string()))?;
-    Ok(pid)
+    // manager.start() spawns the launcher and waits on its output: blocking.
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let profile = state.profile(&profile_id)?;
+        let manager = state.ensure_manager(&profile_id)?;
+        let strategy_file = strategy.unwrap_or_else(|| profile.selected_strategy.clone());
+        let pid = manager.start(&strategy_file).map_err(CommandError::from)?;
+        state
+            .config
+            .update(|c| {
+                if let Some(slot) = c.profiles.iter_mut().find(|p| p.id == profile_id) {
+                    slot.selected_strategy = strategy_file.clone();
+                }
+            })
+            .map_err(|e| CommandError::raw(e.to_string()))?;
+        Ok(pid)
+    })
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 #[tauri::command]
@@ -649,8 +718,14 @@ async fn stop_profile(
     state: tauri::State<'_, AppState>,
     profile_id: String,
 ) -> Result<u32, CommandError> {
-    let manager = state.ensure_manager(&profile_id)?;
-    manager.stop().map_err(CommandError::from)
+    // manager.stop() waits on child-process termination: blocking.
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let manager = state.ensure_manager(&profile_id)?;
+        manager.stop().map_err(CommandError::from)
+    })
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 #[tauri::command]
@@ -668,10 +743,16 @@ async fn install_service(
     profile_id: String,
     strategy: String,
 ) -> Result<(), CommandError> {
-    let manager = state.ensure_manager(&profile_id)?;
-    manager
-        .install_service(&strategy)
-        .map_err(CommandError::from)
+    // Runs `sc create`-style process calls: blocking.
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let manager = state.ensure_manager(&profile_id)?;
+        manager
+            .install_service(&strategy)
+            .map_err(CommandError::from)
+    })
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 #[tauri::command]
@@ -679,8 +760,14 @@ async fn remove_service(
     state: tauri::State<'_, AppState>,
     profile_id: String,
 ) -> Result<(), CommandError> {
-    let manager = state.ensure_manager(&profile_id)?;
-    manager.remove_service().map_err(CommandError::from)
+    // Runs `sc delete`-style process calls: blocking.
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let manager = state.ensure_manager(&profile_id)?;
+        manager.remove_service().map_err(CommandError::from)
+    })
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 #[tauri::command]
@@ -691,6 +778,36 @@ async fn open_in_explorer(path: String) -> Result<(), CommandError> {
 #[tauri::command]
 async fn reveal_config(state: tauri::State<'_, AppState>) -> Result<(), CommandError> {
     win::reveal_file(state.config.path()).map_err(CommandError::raw)
+}
+
+/// Open an external http(s) link in the default browser. Only strict
+/// `http://` / `https://` URLs are accepted (no custom schemes), with a
+/// length cap and no characters that could break argument parsing. The URL
+/// is passed to `explorer.exe` as a single argument — no cmd.exe involved.
+#[tauri::command]
+async fn open_url(url: String) -> Result<(), CommandError> {
+    const MAX_URL_LEN: usize = 2048;
+    if url.len() > MAX_URL_LEN {
+        return Err(CommandError::raw("url too long"));
+    }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(CommandError::raw("only http(s) urls are allowed"));
+    }
+    if url
+        .chars()
+        .any(|c| (c as u32) < 0x21 || matches!(c, '"' | '\'' | '\\'))
+    {
+        return Err(CommandError::raw("url contains forbidden characters"));
+    }
+    let mut cmd = std::process::Command::new("explorer.exe");
+    cmd.arg(&url);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(win::CREATE_NO_WINDOW);
+    }
+    cmd.spawn().map_err(|e| CommandError::raw(e.to_string()))?;
+    Ok(())
 }
 
 // ── lists ──────────────────────────────────────────────────────────
@@ -983,10 +1100,16 @@ async fn netmon_export_csv(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<(), CommandError> {
-    let csv = state.netmon.export_csv();
-    std::fs::write(&path, csv).map_err(|e| CommandError::raw(e.to_string()))?;
-    state.log(LogLevel::Success, "netmon", format!("CSV → {path}"));
-    Ok(())
+    // CSV of up to max_entries rows + file write: blocking.
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let csv = state.netmon.export_csv();
+        std::fs::write(&path, csv).map_err(|e| CommandError::raw(e.to_string()))?;
+        state.log(LogLevel::Success, "netmon", format!("CSV → {path}"));
+        Ok(())
+    })
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 // ── diagnostics ────────────────────────────────────────────────────
@@ -1066,38 +1189,44 @@ async fn diag_run(
     rounds: u32,
     timeout_ms: u64,
 ) -> Result<Vec<SiteReport>, CommandError> {
-    let sites = all_diag_sites(&state);
-    let kinds: Vec<integra_diag::CheckKind> = kinds
-        .iter()
-        .filter_map(|k| match k.as_str() {
-            "dns" => Some(integra_diag::CheckKind::Dns),
-            "tcp" => Some(integra_diag::CheckKind::Tcp),
-            "tls" => Some(integra_diag::CheckKind::Tls),
-            "http" => Some(integra_diag::CheckKind::Http),
-            _ => None,
-        })
-        .collect();
-    if kinds.is_empty() {
-        return Ok(Vec::new());
-    }
-    let rounds = rounds.clamp(1, 10);
-    let timeout = Duration::from_millis(timeout_ms.clamp(500, 15_000));
-    state.log_debug(
-        "diag",
-        format!(
-            "running checks: {} sites, {} kinds",
-            sites.len(),
-            kinds.len()
-        ),
-    );
-    let reports: Vec<SiteReport> = sites
-        .iter()
-        .map(|site| SiteReport {
-            site: site.clone(),
-            outcomes: integra_diag::check_site(site, &kinds, rounds, timeout),
-        })
-        .collect();
-    Ok(reports)
+    // TCP/TLS/HTTP probes block for seconds — keep them pooled.
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let sites = all_diag_sites(&state);
+        let kinds: Vec<integra_diag::CheckKind> = kinds
+            .iter()
+            .filter_map(|k| match k.as_str() {
+                "dns" => Some(integra_diag::CheckKind::Dns),
+                "tcp" => Some(integra_diag::CheckKind::Tcp),
+                "tls" => Some(integra_diag::CheckKind::Tls),
+                "http" => Some(integra_diag::CheckKind::Http),
+                _ => None,
+            })
+            .collect();
+        if kinds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rounds = rounds.clamp(1, 10);
+        let timeout = Duration::from_millis(timeout_ms.clamp(500, 15_000));
+        state.log_debug(
+            "diag",
+            format!(
+                "running checks: {} sites, {} kinds",
+                sites.len(),
+                kinds.len()
+            ),
+        );
+        let reports: Vec<SiteReport> = sites
+            .iter()
+            .map(|site| SiteReport {
+                site: site.clone(),
+                outcomes: integra_diag::check_site(site, &kinds, rounds, timeout),
+            })
+            .collect();
+        Ok(reports)
+    })
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 // ── benchmark ──────────────────────────────────────────────────────
@@ -1108,47 +1237,70 @@ async fn benchmark_start(
     state: tauri::State<'_, AppState>,
     profile_id: String,
 ) -> Result<(), CommandError> {
-    {
-        let existing = state.benchmark.lock();
-        if let Some(bench) = existing.as_ref() {
-            if bench.is_running() {
-                return Err(CommandError::key("bench.running"));
+    // Atomic claim: the old "check is_running, then spawn" sequence let two
+    // concurrent calls pass the check together. One claim wins, everyone
+    // else fails fast; the guard clears it on ANY early error, and
+    // benchmark.rs holds it until the run finishes (even on panic).
+    let claim = BenchmarkClaim::try_claim(&state.benchmark_claim)?;
+    let state = state.inner().clone();
+    let state_for_bench = state.clone();
+    let (manager, strategies, sites) = tauri::async_runtime::spawn_blocking(
+        move || -> Result<
+            (Arc<ZapretManager>, Vec<String>, Vec<(String, String, u16)>),
+            CommandError,
+        > {
+            let profile = state_for_bench.profile(&profile_id)?;
+            let manager = state_for_bench.ensure_manager(&profile_id)?;
+            let strategies: Vec<String> = integra_zapret::strategy::discover(&profile.path)
+                .into_iter()
+                .map(|s| s.file)
+                .collect();
+            if strategies.is_empty() {
+                return Err(CommandError::key("bench.no_strategies"));
             }
-        }
-    }
-    let profile = state.profile(&profile_id)?;
-    let manager = state.ensure_manager(&profile_id)?;
-    let strategies: Vec<String> = integra_zapret::strategy::discover(&profile.path)
-        .into_iter()
-        .map(|s| s.file)
-        .collect();
-    if strategies.is_empty() {
-        return Err(CommandError::key("bench.no_strategies"));
-    }
-    let (installed, _) = manager.service_state(true);
-    if installed {
-        return Err(CommandError::key("bench.conflict"));
-    }
-    let sites: Vec<(String, String, u16)> = all_diag_sites(&state)
-        .into_iter()
-        .take(benchmark::MAX_BENCH_SITES)
-        .map(|s| (s.id, s.host, s.port))
-        .collect();
+            let (installed, _) = manager.service_state(true);
+            if installed {
+                return Err(CommandError::key("bench.conflict"));
+            }
+            let sites: Vec<(String, String, u16)> = all_diag_sites(&state_for_bench)
+                .into_iter()
+                .take(benchmark::MAX_BENCH_SITES)
+                .map(|s| (s.id, s.host, s.port))
+                .collect();
+            Ok((manager, strategies, sites))
+        },
+    )
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))??;
 
     let logs = state.logs.clone();
-    let handle = benchmark::spawn(manager, strategies, sites, move |progress| {
-        use tauri::Emitter;
-        let _ = app.emit("benchmark", progress.clone());
-        logs.log(
-            LogLevel::Debug,
-            "benchmark",
-            format!(
-                "{:?} {} ({}/{})",
-                progress.phase, progress.strategy, progress.index, progress.total
-            ),
-        );
-    });
+    let handle = match benchmark::spawn(
+        manager,
+        strategies,
+        sites,
+        Some(claim.flag()),
+        move |progress| {
+            use tauri::Emitter;
+            let _ = app.emit("benchmark", progress.clone());
+            logs.log(
+                LogLevel::Debug,
+                "benchmark",
+                format!(
+                    "{:?} {} ({}/{})",
+                    progress.phase, progress.strategy, progress.index, progress.total
+                ),
+            );
+        },
+    ) {
+        Ok(handle) => handle,
+        Err(err) => {
+            // benchmark.rs already reset the flags; clear ours too.
+            drop(claim);
+            return Err(err);
+        }
+    };
     *state.benchmark.lock() = Some(handle);
+    claim.keep();
     Ok(())
 }
 
@@ -1241,20 +1393,26 @@ async fn logs_clear(state: tauri::State<'_, AppState>) -> Result<(), CommandErro
 
 #[tauri::command]
 async fn logs_export(state: tauri::State<'_, AppState>, path: String) -> Result<(), CommandError> {
-    let entries = state.logs.snapshot(usize::MAX);
-    let mut body = String::new();
-    for entry in entries {
-        body.push_str(&format!(
-            "{} [{:^7}] [{}] {}\n",
-            entry.ts.format("%Y-%m-%d %H:%M:%S"),
-            entry.level.as_str(),
-            entry.source,
-            entry.message
-        ));
-    }
-    std::fs::write(&path, body).map_err(|e| CommandError::raw(e.to_string()))?;
-    state.log(LogLevel::Success, "logs", format!("exported → {path}"));
-    Ok(())
+    // Snapshot of the whole ring buffer + file write: blocking.
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let entries = state.logs.snapshot(usize::MAX);
+        let mut body = String::new();
+        for entry in entries {
+            body.push_str(&format!(
+                "{} [{:^7}] [{}] {}\n",
+                entry.ts.format("%Y-%m-%d %H:%M:%S"),
+                entry.level.as_str(),
+                entry.source,
+                entry.message
+            ));
+        }
+        std::fs::write(&path, body).map_err(|e| CommandError::raw(e.to_string()))?;
+        state.log(LogLevel::Success, "logs", format!("exported → {path}"));
+        Ok(())
+    })
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 // ── developer mode ─────────────────────────────────────────────────
@@ -1360,29 +1518,89 @@ async fn theme_delete_preset(
     Ok(())
 }
 
-#[tauri::command]
-async fn read_image_data_url(path: String) -> Result<String, CommandError> {
-    let bytes = std::fs::read(&path).map_err(|e| CommandError::raw(e.to_string()))?;
-    if bytes.len() > 8 * 1024 * 1024 {
-        return Err(CommandError::key("theme.image_too_large"));
+/// Wallpaper image extensions accepted by `read_image_data_url`.
+const IMAGE_EXTS: [&str; 7] = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"];
+
+fn mime_for_ext(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        _ => "application/octet-stream",
     }
-    let mime = match Path::new(&path)
+}
+
+/// Read a preset wallpaper image as a data URL. Reads are confined to the
+/// wallpaper directory (`<app_data>/bg`, where `save_background_image`
+/// stores presets): relative paths must be plain names (no `..`, no
+/// backslashes) and are resolved against that directory; absolute legacy
+/// paths are accepted only when they land inside it after canonicalization
+/// of both sides. The extension is allow-listed and the 8 MB cap stands.
+fn read_image_data_url_sync(app: &tauri::AppHandle, path: &str) -> Result<String, CommandError> {
+    if path.is_empty() {
+        return Err(CommandError::raw("bad image path"));
+    }
+    if path.split(['/', '\\']).any(|seg| seg == "..") {
+        return Err(CommandError::raw("bad image path"));
+    }
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| CommandError::raw(e.to_string()))?
+        .join("bg");
+    std::fs::create_dir_all(&base).map_err(|e| CommandError::raw(e.to_string()))?;
+    let base_canon = base
+        .canonicalize()
+        .map_err(|e| CommandError::raw(e.to_string()))?;
+
+    let candidate = Path::new(path);
+    let full = if candidate.is_absolute() {
+        // Legacy presets store the absolute path returned by
+        // save_background_image; containment is enforced below.
+        PathBuf::from(path)
+    } else {
+        // Relative paths must be plain names/subpaths.
+        if path.contains('\\') {
+            return Err(CommandError::raw("bad image path"));
+        }
+        base.join(candidate)
+    };
+    let file = full
+        .canonicalize()
+        .map_err(|e| CommandError::raw(format!("image not found: {e}")))?;
+    if !file.starts_with(&base_canon) {
+        return Err(CommandError::raw(
+            "image path outside the wallpaper directory",
+        ));
+    }
+    let ext = file
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("webp") => "image/webp",
-        Some("gif") => "image/gif",
-        Some("bmp") => "image/bmp",
-        _ => "application/octet-stream",
-    };
+        .ok_or_else(|| CommandError::raw("unsupported image type"))?;
+    if !IMAGE_EXTS.contains(&ext.as_str()) {
+        return Err(CommandError::raw("unsupported image type"));
+    }
+    let bytes = std::fs::read(&file).map_err(|e| CommandError::raw(e.to_string()))?;
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err(CommandError::key("theme.image_too_large"));
+    }
     Ok(format!(
-        "data:{mime};base64,{}",
+        "data:{};base64,{}",
+        mime_for_ext(&ext),
         base64::engine::general_purpose::STANDARD.encode(bytes)
     ))
+}
+
+#[tauri::command]
+async fn read_image_data_url(app: tauri::AppHandle, path: String) -> Result<String, CommandError> {
+    // Up to 8 MB read + base64: keep it off the async threads.
+    tauri::async_runtime::spawn_blocking(move || read_image_data_url_sync(&app, &path))
+        .await
+        .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 /// Persist a cropped/optimized background image (data URL) into the app data
@@ -1392,32 +1610,41 @@ async fn save_background_image(
     app: tauri::AppHandle,
     data_url: String,
 ) -> Result<String, CommandError> {
-    let (_, b64) = data_url
-        .split_once(',')
-        .ok_or_else(|| CommandError::raw("bad data url"))?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .map_err(|e| CommandError::raw(e.to_string()))?;
-    if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
-        return Err(CommandError::raw("bad image size"));
-    }
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| CommandError::raw(e.to_string()))?
-        .join("bg");
-    std::fs::create_dir_all(&dir).map_err(|e| CommandError::raw(e.to_string()))?;
-    let name = format!("bg_{}.png", integra_core::random_hex(4));
-    let path = dir.join(name);
-    std::fs::write(&path, bytes).map_err(|e| CommandError::raw(e.to_string()))?;
-    Ok(path.to_string_lossy().into_owned())
+    // Up to 16 MB base64 decode + write: keep it off the async threads.
+    tauri::async_runtime::spawn_blocking(move || {
+        let (_, b64) = data_url
+            .split_once(',')
+            .ok_or_else(|| CommandError::raw("bad data url"))?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| CommandError::raw(e.to_string()))?;
+        if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
+            return Err(CommandError::raw("bad image size"));
+        }
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| CommandError::raw(e.to_string()))?
+            .join("bg");
+        std::fs::create_dir_all(&dir).map_err(|e| CommandError::raw(e.to_string()))?;
+        let name = format!("bg_{}.png", integra_core::random_hex(4));
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).map_err(|e| CommandError::raw(e.to_string()))?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 // ── zapret maintenance ─────────────────────────────────────────────
 
 #[tauri::command]
 async fn zapret_check_update() -> Result<integra_zapret::maintenance::LatestRelease, CommandError> {
-    integra_zapret::maintenance::fetch_latest().map_err(CommandError::from)
+    // Blocking GitHub call (bounded by the maintenance agent timeouts).
+    tauri::async_runtime::spawn_blocking(integra_zapret::maintenance::fetch_latest)
+        .await
+        .map_err(|e| CommandError::raw(e.to_string()))?
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -1431,16 +1658,44 @@ async fn zapret_installed_version(
     ))
 }
 
+/// Strict version token: `^[0-9]+(\.[0-9]+){0,3}$`, at most 16 chars. The
+/// frontend-supplied version is only ever used to BUILD backend-side URLs.
+fn valid_version_token(version: &str) -> bool {
+    !version.is_empty()
+        && version.len() <= 16
+        && version.split('.').count() <= 4
+        && version
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Install a zapret update. The frontend supplies ONLY the version: the
+/// download URL is built here from the repo constants of the zapret crate
+/// (same repo as `fetch_latest`), the tag must exist on GitHub, and the
+/// downloaded archive is installed ONLY after its sha256 matches the
+/// release asset's published `digest` ("sha256:<hex>"). No verification →
+/// no installation, ever.
 #[tauri::command]
 async fn zapret_install_update(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-    profile_id: String,
     version: String,
-    url: String,
 ) -> Result<(), CommandError> {
-    let profile = state.profile(&profile_id)?;
-    let manager = state.ensure_manager(&profile_id)?;
+    if !valid_version_token(&version) {
+        return Err(CommandError::raw(
+            "invalid version requested (expected digits separated by dots)",
+        ));
+    }
+    let config = state.config.get();
+    // Per the update contract the target is the active profile.
+    let profile = config
+        .profiles
+        .iter()
+        .find(|p| Some(&p.id) == config.active_profile.as_ref())
+        .or_else(|| config.profiles.first())
+        .cloned()
+        .ok_or_else(|| CommandError::key("zapret.path_missing"))?;
+    let manager = state.ensure_manager(&profile.id)?;
     if manager.status() != Status::Stopped {
         return Err(CommandError::key("maint.running_profile"));
     }
@@ -1454,13 +1709,59 @@ async fn zapret_install_update(
             std::env::temp_dir().join(format!("integra-zapret-{}", integra_core::random_hex(4)));
         let zip_path = temp_dir.join(format!("zapret-{version}.zip"));
         let result = (|| -> Result<(), CommandError> {
+            // ── 1. Resolve the release metadata for this exact tag. ──
+            emit(json!({"phase": "verify"}));
+            logs.log(
+                LogLevel::Info,
+                "maint",
+                format!("verifying release v{version}"),
+            );
+            let api_base = maint::RELEASES_API
+                .trim_end_matches("/releases/latest")
+                .to_string();
+            let asset_name = format!("zapret-discord-youtube-{version}.zip");
+            let meta_path = temp_dir.join("release-meta.json");
+            // maint::download already sends the Integra User-Agent and uses
+            // bounded timeouts; an unknown tag fails the request.
+            maint::download(
+                &format!("{api_base}/releases/tags/v{version}"),
+                &meta_path,
+                &|_, _| {},
+            )
+            .map_err(CommandError::from)?;
+            let meta_text = std::fs::read_to_string(&meta_path)
+                .map_err(|e| CommandError::raw(format!("release metadata unreadable: {e}")))?;
+            let meta: Value = serde_json::from_str(&meta_text)
+                .map_err(|e| CommandError::raw(format!("release metadata unparsable: {e}")))?;
+            let digest = meta["assets"]
+                .as_array()
+                .and_then(|assets| {
+                    assets
+                        .iter()
+                        .find(|a| a["name"].as_str() == Some(asset_name.as_str()))
+                        .and_then(|a| a["digest"].as_str())
+                })
+                .ok_or_else(|| {
+                    CommandError::raw(format!(
+                        "release v{version} has no sha256 digest for {asset_name}; refusing to install"
+                    ))
+                })?
+                .strip_prefix("sha256:")
+                .map(str::trim)
+                .ok_or_else(|| CommandError::raw("unsupported digest format"))?
+                .to_ascii_lowercase();
+
+            // ── 2. Download from the backend-built URL. ──────────────
+            let download_base =
+                api_base.replacen("https://api.github.com/repos/", "https://github.com/", 1);
+            let download_url = format!("{download_base}/releases/download/v{version}/{asset_name}");
             logs.log(
                 LogLevel::Info,
                 "maint",
                 tr_with("maint.downloading", &[("percent", "0")]),
             );
             let last = std::cell::Cell::new(u64::MAX);
-            maint::download(&url, &zip_path, &|copied, total| {
+            maint::download(&download_url, &zip_path, &|copied, total| {
                 let percent = copied
                     .checked_mul(100)
                     .and_then(|v| v.checked_div(total))
@@ -1473,6 +1774,25 @@ async fn zapret_install_update(
                 }
             })
             .map_err(CommandError::from)?;
+
+            // ── 3. Verify sha256 of the downloaded bytes. ────────────
+            let mut hasher = sha2::Sha256::new();
+            let file = std::fs::File::open(&zip_path)
+                .map_err(|e| CommandError::raw(format!("downloaded file unreadable: {e}")))?;
+            std::io::copy(&mut std::io::BufReader::new(file), &mut hasher)
+                .map_err(|e| CommandError::raw(format!("hash failed: {e}")))?;
+            let actual: String = hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            if actual != digest {
+                return Err(CommandError::raw(format!(
+                    "sha256 mismatch for v{version}: expected {digest}, got {actual}; install aborted"
+                )));
+            }
+
+            // ── 4. Existing sanitized install/extract flow. ──────────
             emit(json!({"phase": "extract"}));
             logs.log(
                 LogLevel::Info,
@@ -1516,18 +1836,27 @@ async fn dns_benchmark() -> Result<Vec<dns::BenchResult>, CommandError> {
 }
 
 #[tauri::command]
-fn dns_status() -> Result<Value, CommandError> {
-    dns::dns_status()
+async fn dns_status() -> Result<Value, CommandError> {
+    // PowerShell queries (`Get-DnsClientServerAddress`, `net session`).
+    tauri::async_runtime::spawn_blocking(dns::dns_status)
+        .await
+        .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 #[tauri::command]
-fn dns_apply(primary: String, secondary: String, use_doh: bool) -> Result<(), CommandError> {
-    dns::dns_apply(&primary, &secondary, use_doh)
+async fn dns_apply(primary: String, secondary: String, use_doh: bool) -> Result<(), CommandError> {
+    // PowerShell + `ipconfig /flushdns`: blocking.
+    tauri::async_runtime::spawn_blocking(move || dns::dns_apply(&primary, &secondary, use_doh))
+        .await
+        .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 #[tauri::command]
-fn dns_reset() -> Result<(), CommandError> {
-    dns::dns_reset()
+async fn dns_reset() -> Result<(), CommandError> {
+    // PowerShell + `ipconfig /flushdns`: blocking.
+    tauri::async_runtime::spawn_blocking(dns::dns_reset)
+        .await
+        .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 #[tauri::command]
@@ -1537,18 +1866,27 @@ async fn roblox_find() -> Result<Vec<dns::HostsCandidate>, CommandError> {
 }
 
 #[tauri::command]
-fn roblox_hosts_state() -> Result<bool, CommandError> {
-    dns::roblox_hosts_state()
+async fn roblox_hosts_state() -> Result<bool, CommandError> {
+    // Reads the system hosts file: blocking.
+    tauri::async_runtime::spawn_blocking(dns::roblox_hosts_state)
+        .await
+        .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 #[tauri::command]
-fn roblox_hosts_apply(ip: String) -> Result<String, CommandError> {
-    dns::roblox_hosts_apply(&ip)
+async fn roblox_hosts_apply(ip: String) -> Result<dns::HostsApplyReport, CommandError> {
+    // Reads + atomically rewrites the system hosts file: blocking.
+    tauri::async_runtime::spawn_blocking(move || dns::roblox_hosts_apply(&ip))
+        .await
+        .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 #[tauri::command]
-fn roblox_hosts_revert() -> Result<bool, CommandError> {
-    dns::roblox_hosts_revert()
+async fn roblox_hosts_revert() -> Result<bool, CommandError> {
+    // Reads + atomically rewrites the system hosts file: blocking.
+    tauri::async_runtime::spawn_blocking(dns::roblox_hosts_revert)
+        .await
+        .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 // ── TG WS Proxy ────────────────────────────────────────────────────
@@ -1563,46 +1901,54 @@ fn tgproxy_log_dir() -> PathBuf {
 }
 
 #[tauri::command]
-fn tgproxy_status(state: tauri::State<'_, AppState>) -> Result<Value, CommandError> {
-    let cfg = state.config.get();
-    let dir = tgproxy::find_dir(&cfg.tgproxy.path);
-    let mut secret = cfg.tgproxy.secret.clone();
-    if secret.len() != 32 {
-        secret = integra_core::random_hex(16);
-        let s = secret.clone();
-        let _ = state.config.update(move |c| c.tgproxy.secret = s);
-    }
-    {
-        let mut inner = state.tgproxy.lock();
-        if inner.child.is_some() && !inner.is_running() {
-            inner.child = None;
+async fn tgproxy_status(state: tauri::State<'_, AppState>) -> Result<Value, CommandError> {
+    // Filesystem probes + a 300 ms TCP port probe: blocking.
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = state.config.get();
+        let dir = tgproxy::find_dir(&cfg.tgproxy.path);
+        let mut secret = cfg.tgproxy.secret.clone();
+        if secret.len() != 32 {
+            secret = integra_core::random_hex(16);
+            let s = secret.clone();
+            let _ = state.config.update(move |c| c.tgproxy.secret = s);
         }
-    }
-    let running = state.tgproxy.lock().is_running()
-        || tgproxy::port_open(cfg.tgproxy.port);
-    let version = dir
-        .as_ref()
-        .map(|d| tgproxy::read_version(d))
-        .unwrap_or_default();
-    let venv_ok = dir
-        .as_ref()
-        .map(|d| d.join(".venv/Scripts/python.exe").exists())
-        .unwrap_or(false);
-    let link = format!(
-        "tg://proxy?server=127.0.0.1&port={}&secret={}",
-        cfg.tgproxy.port, secret
-    );
-    Ok(json!({
-        "dir": dir.as_ref().map(|d| d.to_string_lossy().into_owned()),
-        "exists": dir.is_some(),
-        "version": version,
-        "venv_ok": venv_ok,
-        "setup_running": state.tgproxy.lock().setup_running,
-        "running": running,
-        "port": cfg.tgproxy.port,
-        "secret": secret,
-        "link": link,
-    }))
+        {
+            let mut inner = state.tgproxy.lock();
+            if inner.child.is_some() && !inner.is_running() {
+                inner.child = None;
+                inner.port = None;
+            }
+        }
+        // Prefer the real port the running proxy reported (`LISTENING`).
+        let port = state.tgproxy.lock().port.unwrap_or(cfg.tgproxy.port);
+        let running = state.tgproxy.lock().is_running() || tgproxy::port_open(port);
+        let version = dir
+            .as_ref()
+            .map(|d| tgproxy::read_version(d))
+            .unwrap_or_default();
+        let venv_ok = dir
+            .as_ref()
+            .map(|d| d.join(".venv/Scripts/python.exe").exists())
+            .unwrap_or(false);
+        let link = format!(
+            "tg://proxy?server=127.0.0.1&port={}&secret={}",
+            port, secret
+        );
+        Ok(json!({
+            "dir": dir.as_ref().map(|d| d.to_string_lossy().into_owned()),
+            "exists": dir.is_some(),
+            "version": version,
+            "venv_ok": venv_ok,
+            "setup_running": state.tgproxy.lock().setup_running,
+            "running": running,
+            "port": port,
+            "secret": secret,
+            "link": link,
+        }))
+    })
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 #[tauri::command]
@@ -1631,41 +1977,56 @@ async fn tgproxy_setup(state: tauri::State<'_, AppState>) -> Result<(), CommandE
     Ok(())
 }
 
+/// Start the proxy. The frontend passes only non-secret settings (an
+/// optional preferred port); the secret is generated/stored backend-side and
+/// exposed exclusively via `tgproxy_status`. It reaches the python process
+/// through the `TGPROXY_SECRET` environment variable — never argv. External
+/// builds with the handshake bind port 0 and report the real port via
+/// `LISTENING <port>`; older builds run in compatibility mode on the
+/// configured port (see tgproxy::spawn_proxy).
 #[tauri::command]
-fn tgproxy_start(
+async fn tgproxy_start(
     state: tauri::State<'_, AppState>,
     port: Option<u16>,
-    secret: Option<String>,
 ) -> Result<(), CommandError> {
-    let mut cfg = state.config.get();
-    let p = port.unwrap_or(cfg.tgproxy.port).clamp(1024, 65535);
-    let s = match secret {
-        Some(s) if s.len() == 32 => s,
-        _ if cfg.tgproxy.secret.len() == 32 => cfg.tgproxy.secret.clone(),
-        _ => {
-            let g = integra_core::random_hex(16);
-            cfg.tgproxy.secret = g.clone();
-            g
+    // Spawns the child and waits (bounded) for its `LISTENING` line.
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut cfg = state.config.get();
+        let p = port.unwrap_or(cfg.tgproxy.port).clamp(1024, 65535);
+        // The secret NEVER comes from the frontend: reuse the persisted one,
+        // generating (and persisting) a fresh value when missing.
+        if cfg.tgproxy.secret.len() != 32 {
+            cfg.tgproxy.secret = integra_core::random_hex(16);
         }
-    };
-    if cfg.tgproxy.port != p || cfg.tgproxy.secret != s {
         cfg.tgproxy.port = p;
-        cfg.tgproxy.secret = s.clone();
         let saved = cfg.tgproxy.clone();
         let _ = state.config.update(move |c| c.tgproxy = saved);
-    }
-    let dir = tgproxy::find_dir(&cfg.tgproxy.path)
-        .ok_or_else(|| CommandError::key("tgproxy.not_found"))?;
-    let shared = state.tgproxy.clone();
-    let log_dir = tgproxy_log_dir();
-    tgproxy::spawn_proxy(shared, &dir, p, &s, &log_dir)?;
-    Ok(())
+        let secret = cfg.tgproxy.secret.clone();
+        let dir = tgproxy::find_dir(&cfg.tgproxy.path)
+            .ok_or_else(|| CommandError::key("tgproxy.not_found"))?;
+        let shared = state.tgproxy.clone();
+        let log_dir = tgproxy_log_dir();
+        // Handshake-capable builds bind port 0 and report the real port via
+        // the `LISTENING <port>` stdout line; legacy builds get the
+        // configured port and are probed by TCP connect (tgproxy::spawn_proxy).
+        tgproxy::spawn_proxy(shared, &dir, p, &secret, &log_dir)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 #[tauri::command]
-fn tgproxy_stop(state: tauri::State<'_, AppState>) -> Result<(), CommandError> {
-    tgproxy::stop_proxy(state.tgproxy.clone());
-    Ok(())
+async fn tgproxy_stop(state: tauri::State<'_, AppState>) -> Result<(), CommandError> {
+    // taskkill /T /F waits for process termination: blocking.
+    let shared = state.tgproxy.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        tgproxy::stop_proxy(shared);
+        Ok(())
+    })
+    .await
+    .map_err(|e| CommandError::raw(e.to_string()))?
 }
 
 #[tauri::command]
@@ -1759,6 +2120,7 @@ pub fn run() {
         netmon: Netmon::new(),
         bridge,
         benchmark: Mutex::new(None),
+        benchmark_claim: Arc::new(AtomicBool::new(false)),
         tgproxy: Arc::new(Mutex::new(tgproxy::TgProxyInner::default())),
     });
 
@@ -1901,8 +2263,7 @@ pub fn run() {
                                 })
                                 .unwrap_or(false);
                             if on_screen {
-                                let _ = window
-                                    .set_position(tauri::PhysicalPosition::new(x, y));
+                                let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
                             }
                         }
                     }
@@ -1968,6 +2329,7 @@ pub fn run() {
             remove_service,
             open_in_explorer,
             reveal_config,
+            open_url,
             list_read,
             list_meta,
             list_add,

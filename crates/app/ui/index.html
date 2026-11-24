@@ -4,10 +4,20 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Integra</title>
+  <script>
+    // Apply the persisted theme before the stylesheet loads to avoid a flash
+    // of the wrong theme (dark_accent is the CSS default, needs no class).
+    (function () {
+      try {
+        var v = localStorage.getItem('integra.theme');
+        if (v === 'dark' || v === 'light') document.documentElement.classList.add('theme-' + v);
+      } catch (e) { /* private mode etc. */ }
+    })();
+  </script>
   <link rel="stylesheet" href="css/app.css" />
 </head>
-<body class="theme-dark_accent pos-top style-full">
-  <div id="app" aria-live="polite">
+<body class="pos-top style-full">
+  <div id="app">
     <!-- ══ TAB BAR (taskbar) ══ -->
     <nav id="taskbar" aria-label="main navigation">
       <div class="brand" title="Integra">
@@ -30,8 +40,8 @@
             <p class="muted" data-i18n="dashboard.subtitle"></p>
           </div>
           <div class="header-actions">
-            <button class="btn primary" id="btn-add-profile">＋ <span data-i18n="dashboard.add_profile"></span></button>
-            <button class="btn ghost icon-only help-btn" data-help="dashboard" title="?">?</button>
+            <button type="button" class="btn primary" id="btn-add-profile">＋ <span data-i18n="dashboard.add_profile"></span></button>
+            <button type="button" class="btn ghost icon-only help-btn" data-help="dashboard" title="?" data-i18n-aria-label="common.help">?</button>
           </div>
         </header>
         <div id="profiles-grid" class="cards-grid"></div>
@@ -44,9 +54,9 @@
             <p class="muted" data-i18n="netmon.subtitle"></p>
           </div>
           <div class="header-actions">
-            <button class="btn primary" id="btn-netmon-toggle"></button>
-            <button class="btn ghost" id="btn-netmon-csv" data-i18n="netmon.export_csv"></button>
-            <button class="btn ghost icon-only help-btn" data-help="apps" title="?">?</button>
+            <button type="button" class="btn primary" id="btn-netmon-toggle"></button>
+            <button type="button" class="btn ghost" id="btn-netmon-csv" data-i18n="netmon.export_csv"></button>
+            <button type="button" class="btn ghost icon-only help-btn" data-help="apps" title="?" data-i18n-aria-label="common.help">?</button>
           </div>
         </header>
 
@@ -98,7 +108,7 @@
             <p class="muted" id="lists-source-label"></p>
           </div>
           <div class="header-actions">
-            <button class="btn ghost icon-only help-btn" data-help="lists" title="?">?</button>
+            <button type="button" class="btn ghost icon-only help-btn" data-help="lists" title="?" data-i18n-aria-label="common.help">?</button>
           </div>
         </header>
         <div class="row gap wrap" id="lists-toolbar">
@@ -144,7 +154,7 @@
             <p class="muted" data-i18n="diag.subtitle"></p>
           </div>
           <div class="header-actions">
-            <button class="btn ghost icon-only help-btn" data-help="diagnostics" title="?">?</button>
+            <button type="button" class="btn ghost icon-only help-btn" data-help="diagnostics" title="?" data-i18n-aria-label="common.help">?</button>
           </div>
         </header>
 
@@ -160,7 +170,7 @@
               <input type="number" id="diag-rounds" min="1" max="10" value="2" class="w-16" /></label>
             <label class="field inline"><span data-i18n="diag.timeout"></span>
               <input type="number" id="diag-timeout" min="1" max="15" value="4" class="w-16" /></label>
-            <button class="btn primary" id="btn-diag-run" data-i18n="diag.run"></button>
+            <button type="button" class="btn primary" id="btn-diag-run" data-i18n="diag.run"></button>
           </div>
           <p class="muted small" data-i18n="diag.tls_note"></p>
         </div>
@@ -171,8 +181,8 @@
           <p class="muted small" data-i18n="bench.desc"></p>
           <div class="row gap wrap">
             <select id="bench-profile" class="min-w-40"></select>
-            <button class="btn primary" id="btn-bench-start" data-i18n="bench.start"></button>
-            <button class="btn danger" id="btn-bench-cancel" data-i18n="bench.cancel" hidden></button>
+            <button type="button" class="btn primary" id="btn-bench-start" data-i18n="bench.start"></button>
+            <button type="button" class="btn danger" id="btn-bench-cancel" data-i18n="bench.cancel" hidden></button>
             <span id="bench-state" class="muted small grow"></span>
           </div>
           <div id="bench-progress-bar" class="progress" hidden><div class="progress-fill"></div></div>
@@ -185,7 +195,7 @@
             <input id="diag-site-name" class="w-32" data-i18n-placeholder="common.name" />
             <input id="diag-site-host" class="grow" placeholder="example.com" />
             <input type="number" id="diag-site-port" min="1" max="65535" value="443" class="w-24" />
-            <button class="btn ghost" id="btn-diag-add-site" data-i18n="diag.add_site"></button>
+            <button type="button" class="btn ghost" id="btn-diag-add-site" data-i18n="diag.add_site"></button>
           </div>
           <div id="diag-sites-list" class="chips"></div>
         </div>
@@ -198,7 +208,7 @@
             <p class="muted" data-i18n="dns.subtitle"></p>
           </div>
           <div class="header-actions">
-            <button class="btn ghost icon-only help-btn" data-help="dns" title="?">?</button>
+            <button type="button" class="btn ghost icon-only help-btn" data-help="dns" title="?" data-i18n-aria-label="common.help">?</button>
           </div>
         </header>
 
@@ -212,9 +222,9 @@
           <div class="row gap wrap">
             <h3 class="section-title grow" data-i18n="dns.bench_title"></h3>
             <label class="check"><input type="checkbox" id="dns-doh" checked /><span data-i18n="dns.use_doh"></span></label>
-            <button class="btn primary" id="btn-dns-bench" data-i18n="dns.run_bench"></button>
-            <button class="btn" id="btn-dns-apply" data-i18n="dns.apply_selected"></button>
-            <button class="btn danger" id="btn-dns-reset" data-i18n="dns.reset"></button>
+            <button type="button" class="btn primary" id="btn-dns-bench" data-i18n="dns.run_bench"></button>
+            <button type="button" class="btn" id="btn-dns-apply" data-i18n="dns.apply_selected"></button>
+            <button type="button" class="btn danger" id="btn-dns-reset" data-i18n="dns.reset"></button>
           </div>
           <span id="dns-bench-state" class="muted small"></span>
           <div id="dns-results" hidden></div>
@@ -224,8 +234,8 @@
           <h3 class="section-title" data-i18n="dns.hosts_title"></h3>
           <p class="muted small" data-i18n="dns.hosts_desc"></p>
           <div class="row gap wrap">
-            <button class="btn primary" id="btn-rbx-find" data-i18n="dns.hosts_analyze"></button>
-            <button class="btn danger" id="btn-rbx-revert" data-i18n="dns.hosts_revert" hidden></button>
+            <button type="button" class="btn primary" id="btn-rbx-find" data-i18n="dns.hosts_analyze"></button>
+            <button type="button" class="btn danger" id="btn-rbx-revert" data-i18n="dns.hosts_revert" hidden></button>
             <span id="rbx-state" class="muted small grow"></span>
           </div>
           <div id="rbx-results"></div>
@@ -240,7 +250,7 @@
             <p class="muted" data-i18n="tgproxy.subtitle"></p>
           </div>
           <div class="header-actions">
-            <button class="btn ghost icon-only help-btn" data-help="tgproxy" title="?">?</button>
+            <button type="button" class="btn ghost icon-only help-btn" data-help="tgproxy" title="?" data-i18n-aria-label="common.help">?</button>
           </div>
         </header>
 
@@ -248,14 +258,14 @@
           <div class="row gap wrap">
             <h3 class="section-title grow" data-i18n="tgproxy.status_title"></h3>
             <span class="pill run" id="tg-running-badge" hidden></span>
-            <button class="btn primary" id="btn-tg-start" data-i18n="tgproxy.start"></button>
-            <button class="btn danger" id="btn-tg-stop" data-i18n="tgproxy.stop" hidden></button>
+            <button type="button" class="btn primary" id="btn-tg-start" data-i18n="tgproxy.start"></button>
+            <button type="button" class="btn danger" id="btn-tg-stop" data-i18n="tgproxy.stop" hidden></button>
           </div>
           <div class="row gap wrap">
             <span class="field-label" data-i18n="common.path"></span>
             <input id="tg-path" class="grow" placeholder="C:\...tg-ws-proxy-main" />
             <button class="btn ghost" id="btn-tg-browse" data-i18n="profile.choose_folder"></button>
-            <button class="btn ghost" id="btn-tg-setup" data-i18n="tgproxy.setup"></button>
+            <button type="button" class="btn ghost" id="btn-tg-setup" data-i18n="tgproxy.setup"></button>
           </div>
           <p class="muted small" id="tg-dir-hint" data-i18n="tgproxy.not_found" hidden></p>
           <div class="row gap wrap">
@@ -265,19 +275,20 @@
           <div class="row gap wrap">
             <span class="field-label" data-i18n="tgproxy.port"></span>
             <input type="number" id="tg-port" class="w-24" min="1024" max="65535" value="1443" />
+            <span id="tg-port-error" class="muted small" data-i18n="common.port_invalid" hidden></span>
             <span class="field-label" data-i18n="tgproxy.secret"></span><code id="tg-secret" class="mono"></code>
           </div>
           <div class="row gap wrap">
             <span class="field-label" data-i18n="tgproxy.link"></span>
             <input id="tg-link" class="grow mono" readonly />
-            <button class="btn ghost" id="btn-tg-copy" data-i18n="common.copy"></button>
+            <button type="button" class="btn ghost" id="btn-tg-copy" data-i18n="common.copy"></button>
           </div>
         </div>
 
         <div class="card">
           <div class="row gap wrap">
             <h3 class="section-title grow" data-i18n="tgproxy.logs_title"></h3>
-            <button class="btn ghost" id="btn-tg-logs-refresh" data-i18n="common.refresh"></button>
+            <button type="button" class="btn ghost" id="btn-tg-logs-refresh" data-i18n="common.refresh"></button>
           </div>
           <pre id="tg-logs" class="logs-box"></pre>
         </div>
@@ -286,61 +297,61 @@
       <section id="page-analysis" class="page" hidden>
         <header class="page-header">
           <div>
-            <h2>Анализ: «белые списки» интернета в РФ</h2>
-            <p class="muted">Как устроена фильтрация и чем лечится каждый её режим (по материалам проекта whitelist-bypass, сентябрь 2026)</p>
+            <h2 data-i18n="analysis.title"></h2>
+            <p class="muted" data-i18n="analysis.subtitle"></p>
           </div>
         </header>
 
         <div class="card">
-          <h3 class="section-title">Проверка интернета</h3>
-          <p class="muted small">Быстрый тест: работает ли сеть, режет ли DNS, есть ли заморозка по объёму или режим белого списка.</p>
+          <h3 class="section-title" data-i18n="analysis.check_title"></h3>
+          <p class="muted small" data-i18n="analysis.check_desc"></p>
           <div class="row gap wrap">
-            <button class="btn primary" id="btn-netcheck">Проверить интернет</button>
+            <button type="button" class="btn primary" id="btn-netcheck" data-i18n="analysis.check_run"></button>
             <span id="netcheck-state" class="muted small grow"></span>
           </div>
           <div id="netcheck-results"></div>
         </div>
 
         <div class="card">
-          <h3 class="section-title">Три уровня фильтрации — не путайте их</h3>
+          <h3 class="section-title" data-i18n="analysis.levels_title"></h3>
           <table class="table">
-            <thead><tr><th>Уровень</th><th>Что фильтруется</th><th>Как выглядит сбой</th><th>Чем лечится</th></tr></thead>
+            <thead><tr><th data-i18n="analysis.th_level"></th><th data-i18n="analysis.th_filtered"></th><th data-i18n="analysis.th_symptom"></th><th data-i18n="analysis.th_remedy"></th></tr></thead>
             <tbody>
-              <tr><td><b>1. SNI/Host</b></td><td>имя сайта в TLS ClientHello или HTTP Host</td><td>сайт не открывается, соединение рвётся / RST</td><td>фрагментация пакетов (sniproxy), подмена SNI, DoH</td></tr>
-              <tr><td><b>2. Объём на сессию</b></td><td>байты в одной TCP-сессии</td><td>страница грузится и замирает после ~16 КБ, разрыва нет</td><td>цепочка через РФ-узел, ротация соединений (chain-relay burst)</td></tr>
-              <tr><td><b>3. IP/CIDR/ASN</b></td><td>адрес назначения, целые автономные системы</td><td>таймаут, пакеты не идут вообще</td><td>только узел на «белом» IP внутри РФ</td></tr>
+              <tr><td><b>1. SNI/Host</b></td><td data-i18n="analysis.levels_r1c2"></td><td data-i18n="analysis.levels_r1c3"></td><td data-i18n="analysis.levels_r1c4"></td></tr>
+              <tr><td data-i18n-html="analysis.levels_r2c1"></td><td data-i18n="analysis.levels_r2c2"></td><td data-i18n="analysis.levels_r2c3"></td><td data-i18n="analysis.levels_r2c4"></td></tr>
+              <tr><td><b>3. IP/CIDR/ASN</b></td><td data-i18n="analysis.levels_r3c2"></td><td data-i18n="analysis.levels_r3c3"></td><td data-i18n="analysis.levels_r3c4"></td></tr>
             </tbody>
           </table>
-          <p class="muted small">Главная ошибка — лечить уровень 3 инструментами уровня 1: если фильтрация по IP, соединение дропается до разбора SNI.</p>
+          <p class="muted small" data-i18n="analysis.levels_note"></p>
         </div>
 
         <div class="card">
-          <h3 class="section-title">Что делать в каком режиме</h3>
+          <h3 class="section-title" data-i18n="analysis.verdicts_title"></h3>
           <table class="table">
-            <thead><tr><th>Вердикт</th><th>Действие</th></tr></thead>
+            <thead><tr><th data-i18n="analysis.th_verdict"></th><th data-i18n="analysis.th_action"></th></tr></thead>
             <tbody>
-              <tr><td><b>CLEAN</b></td><td>ограничений нет — ничего не нужно</td></tr>
-              <tr><td><b>BLACKLIST</b></td><td>обычный чёрный список по доменам → sniproxy (tls-split), DoH</td></tr>
-              <tr><td><b>FREEZE16K / REGISTRY_SZS</b></td><td>заморозка по объёму → цепочка из 3 узлов (РФ-мост → выходная нода), chain-relay burst для больших файлов</td></tr>
-              <tr><td><b>HARD_WHITELIST / DROP_ALL</b></td><td>фильтрация по IP/ASN → нужен узел на «белом» IP внутри РФ; проверьте свою AS (wlprobe asn)</td></tr>
+              <tr><td><b>CLEAN</b></td><td data-i18n="analysis.verdict_clean"></td></tr>
+              <tr><td><b>BLACKLIST</b></td><td data-i18n="analysis.verdict_blacklist"></td></tr>
+              <tr><td><b>FREEZE16K / REGISTRY_SZS</b></td><td data-i18n="analysis.verdict_freeze"></td></tr>
+              <tr><td><b>HARD_WHITELIST / DROP_ALL</b></td><td data-i18n="analysis.verdict_hard"></td></tr>
             </tbody>
           </table>
         </div>
 
         <div class="card">
-          <h3 class="section-title">Честные ограничения</h3>
+          <h3 class="section-title" data-i18n="analysis.limits_title"></h3>
           <ul class="muted small">
-            <li>Надёжного способа сохранить доступ в режиме реестра СЗС нет — фильтрация бьёт по инфраструктуре самих средств обхода.</li>
-            <li>Поиск «белого» IP в российских облаках — лотерея: списки меняются, держите запасной узел.</li>
-            <li>Даже разрешённое работает нестабильно: доля успешных соединений в режиме реестра ≤ ~10%.</li>
-            <li>Белые списки различаются у операторов — проверяйте каждый канал отдельно.</li>
-            <li>Проводной доступ пока почти не затронут.</li>
+            <li data-i18n="analysis.limits_l1"></li>
+            <li data-i18n="analysis.limits_l2"></li>
+            <li data-i18n="analysis.limits_l3"></li>
+            <li data-i18n="analysis.limits_l4"></li>
+            <li data-i18n="analysis.limits_l5"></li>
           </ul>
         </div>
 
         <div class="card">
-          <h3 class="section-title">Правовые риски (кратко)</h3>
-          <p class="muted small">Использование VPN физлицом отдельной ответственности не влечёт; реклама VPN-сервисов — штрафы; хостинг узла обхода на территории РФ — отдельная зона риска. Это не юридическая консультация.</p>
+          <h3 class="section-title" data-i18n="analysis.legal_title"></h3>
+          <p class="muted small" data-i18n="analysis.legal_note"></p>
         </div>
 
         <div id="analysis-full"></div>
@@ -353,7 +364,7 @@
             <p class="muted" data-i18n="extension.subtitle"></p>
           </div>
           <div class="header-actions">
-            <button class="btn ghost icon-only help-btn" data-help="extension" title="?">?</button>
+            <button type="button" class="btn ghost icon-only help-btn" data-help="extension" title="?" data-i18n-aria-label="common.help">?</button>
           </div>
         </header>
         <div class="card center-col">
@@ -365,11 +376,11 @@
             <label class="field-label" data-i18n="extension.pairing_code"></label>
             <div class="row gap center">
               <div class="pairing-code" id="pairing-code">······</div>
-              <button class="btn ghost" id="btn-pair-copy" data-i18n="common.copy"></button>
+              <button type="button" class="btn ghost" id="btn-pair-copy" data-i18n="common.copy"></button>
             </div>
             <div class="row gap center">
               <span class="muted small" id="pairing-expires"></span>
-              <button class="btn ghost" id="btn-pair-regen" data-i18n="extension.regenerate"></button>
+              <button type="button" class="btn ghost" id="btn-pair-regen" data-i18n="extension.regenerate"></button>
             </div>
           </div>
           <pre class="instructions" id="bridge-instructions"></pre>
@@ -382,9 +393,9 @@
             <h2 data-i18n="logs.title"></h2>
           </div>
           <div class="header-actions">
-            <button class="btn ghost" id="btn-logs-clear" data-i18n="logs.clear"></button>
-            <button class="btn ghost" id="btn-logs-export" data-i18n="logs.export"></button>
-            <button class="btn ghost icon-only help-btn" data-help="logs" title="?">?</button>
+            <button type="button" class="btn ghost" id="btn-logs-clear" data-i18n="logs.clear"></button>
+            <button type="button" class="btn ghost" id="btn-logs-export" data-i18n="logs.export"></button>
+            <button type="button" class="btn ghost icon-only help-btn" data-help="logs" title="?" data-i18n-aria-label="common.help">?</button>
           </div>
         </header>
         <div class="card">
@@ -402,7 +413,7 @@
             <h2 data-i18n="settings.title"></h2>
           </div>
           <div class="header-actions">
-            <button class="btn ghost icon-only help-btn" data-help="settings" title="?">?</button>
+            <button type="button" class="btn ghost icon-only help-btn" data-help="settings" title="?" data-i18n-aria-label="common.help">?</button>
           </div>
         </header>
         <div id="settings-body"></div>
@@ -412,13 +423,13 @@
 
   <!-- ══ MODAL ══ -->
   <div id="modal-backdrop" hidden>
-    <div id="modal" role="dialog" aria-modal="true">
+    <div id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <h3 id="modal-title"></h3>
       <div id="modal-body"></div>
       <div id="modal-actions" class="row gap end"></div>
     </div>
   </div>
-  <div id="toasts"></div>
+  <div id="toasts" role="status" aria-live="polite"></div>
 
   <!-- ═══ FIRST-RUN SETUP / COMPONENT CHECK ═══ -->
   <div id="setup-overlay" hidden>
@@ -432,10 +443,7 @@
     </div>
   </div>
 
-  <div id="mock-banner" hidden>PREVIEW (mock backend)</div>
-
   <script src="js/i18n-data.js"></script>
-  <script src="js/mock.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

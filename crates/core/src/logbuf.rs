@@ -1,8 +1,9 @@
 //! In-memory ring log buffer with fan-out to subscribers (UI logs page,
 //! Tauri events, crash diagnostics).
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
+use std::thread::ThreadId;
 
 use chrono::{DateTime, Local};
 use parking_lot::Mutex;
@@ -64,6 +65,10 @@ pub struct LogBuffer {
     entries: Mutex<VecDeque<LogEntry>>,
     subscribers: Mutex<Vec<LogSubscriber>>,
     min_level: Mutex<LogLevel>,
+    /// Threads currently inside the fan-out section: a nested `log()` from a
+    /// subscriber callback is recorded in the ring but must not re-enter the
+    /// fan-out, or a callback that logs would recurse without bound.
+    notifying: Mutex<HashSet<ThreadId>>,
     capacity: usize,
 }
 
@@ -73,6 +78,7 @@ impl LogBuffer {
             entries: Mutex::new(VecDeque::with_capacity(capacity.min(4096))),
             subscribers: Mutex::new(Vec::new()),
             min_level: Mutex::new(LogLevel::Debug),
+            notifying: Mutex::new(HashSet::new()),
             capacity,
         })
     }
@@ -102,7 +108,29 @@ impl LogBuffer {
             }
             entries.push_back(entry.clone());
         }
-        for sub in self.subscribers.lock().iter() {
+        // Fan out OUTSIDE the entries lock: a subscriber that (un)subscribes
+        // from within the callback would otherwise deadlock on the
+        // non-reentrant subscribers mutex. Clone the list under a short lock,
+        // release it, then invoke the callbacks.
+        let tid = std::thread::current().id();
+        {
+            let mut notifying = self.notifying.lock();
+            if !notifying.insert(tid) {
+                // Nested call from a subscriber callback on this thread: the
+                // entry is already stored in the ring above; skip re-fanning
+                // out to bound the recursion depth at one level.
+                return;
+            }
+        }
+        struct FanOutGuard<'a>(&'a Mutex<HashSet<ThreadId>>, ThreadId);
+        impl Drop for FanOutGuard<'_> {
+            fn drop(&mut self) {
+                self.0.lock().remove(&self.1);
+            }
+        }
+        let _guard = FanOutGuard(&self.notifying, tid);
+        let subscribers = self.subscribers.lock().clone();
+        for sub in subscribers {
             sub(&entry);
         }
     }
@@ -147,5 +175,26 @@ mod tests {
         buffer.log(LogLevel::Info, "t", "hidden");
         buffer.log(LogLevel::Error, "t", "shown");
         assert_eq!(buffer.snapshot(10).len(), 1);
+    }
+
+    #[test]
+    fn subscriber_may_log_recursively() {
+        // Regression: a callback that logs back into the buffer used to run
+        // while the subscribers mutex was held → deadlock; and without the
+        // re-entrancy guard the recursion would be unbounded (stack
+        // overflow). Now: nested entry lands in the ring, fan-out stays at
+        // depth one.
+        let buffer = LogBuffer::new(10);
+        let reentrant: Arc<LogBuffer> = buffer.clone();
+        buffer.subscribe(Arc::new(move |entry: &LogEntry| {
+            reentrant.log(LogLevel::Warn, "reentrant", &entry.message);
+        }));
+        buffer.log(LogLevel::Info, "test", "hello");
+        let snap = buffer.snapshot(10);
+        assert_eq!(snap.len(), 2);
+        assert_eq!(snap[0].message, "hello");
+        assert_eq!(snap[0].source, "test");
+        assert_eq!(snap[1].source, "reentrant");
+        assert_eq!(snap[1].message, "hello");
     }
 }

@@ -11,6 +11,8 @@ use serde::Serialize;
 use integra_diag::CheckKind;
 use integra_zapret::{Status, ZapretManager};
 
+use crate::CommandError;
+
 const WARMUP: Duration = Duration::from_millis(2500);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(4);
 pub const MAX_BENCH_SITES: usize = 6;
@@ -120,13 +122,33 @@ fn check_sites(hosts: &[(String, String, u16)]) -> (usize, usize, u64) {
     (passed, total, latency_sum)
 }
 
-/// Run the whole benchmark in the background. `emit` receives (phase, strategy, index, total).
+/// Guard clearing the running/start-claim flags on every exit path —
+/// including a panic inside the benchmark thread (unwind runs `Drop`), so a
+/// crashed run can never leave the feature dead until restart.
+struct FinishGuard {
+    bench: Arc<Benchmark>,
+    claim: Option<Arc<AtomicBool>>,
+}
+
+impl Drop for FinishGuard {
+    fn drop(&mut self) {
+        self.bench.running.store(false, Ordering::Relaxed);
+        if let Some(claim) = &self.claim {
+            claim.store(false, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Run the whole benchmark in the background. `emit` receives (phase,
+/// strategy, index, total). `claim` is the start-claim flag owned by the app
+/// state: it is held for the whole run and cleared here on every exit path.
 pub fn spawn(
     manager: Arc<ZapretManager>,
     strategies: Vec<String>,
     sites: Vec<(String, String, u16)>,
+    claim: Option<Arc<AtomicBool>>,
     on_event: impl Fn(BenchProgress) + Send + Sync + 'static,
-) -> Arc<Benchmark> {
+) -> Result<Arc<Benchmark>, CommandError> {
     let bench = Arc::new(Benchmark::default());
     bench.running.store(true, Ordering::Relaxed);
     {
@@ -136,9 +158,14 @@ pub fn spawn(
     }
 
     let bench_ref = bench.clone();
+    let thread_claim = claim.clone();
     std::thread::Builder::new()
         .name("integra-benchmark".into())
         .spawn(move || {
+            let _finish = FinishGuard {
+                bench: bench_ref.clone(),
+                claim: thread_claim,
+            };
             let original_strategy = manager.current_strategy();
             let was_running = manager.status() == Status::Running;
 
@@ -242,9 +269,20 @@ pub fn spawn(
                 cancelled,
                 restored_strategy: original_strategy,
             });
-            bench_ref.running.store(false, Ordering::Relaxed);
+            // Drop the guard first: it clears `running` and the start-claim
+            // flag, so the final UI event reports a finished (not running)
+            // benchmark.
+            drop(_finish);
             on_event(bench_ref.progress());
         })
-        .ok();
-    bench
+        .map_err(|err| {
+            // The thread never started: clear the flags we already set,
+            // otherwise the running/claim state stays stuck until restart.
+            bench.running.store(false, Ordering::Relaxed);
+            if let Some(claim) = &claim {
+                claim.store(false, Ordering::Relaxed);
+            }
+            CommandError::raw(format!("benchmark thread: {err}"))
+        })?;
+    Ok(bench)
 }
